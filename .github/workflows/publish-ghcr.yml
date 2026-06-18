@@ -1,0 +1,43 @@
+name: Publish GHCR image
+
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login "$REGISTRY" -u "${{ github.actor }}" --password-stdin
+
+      - name: Build and push image
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          image="$REGISTRY/${IMAGE_NAME,,}"
+          sha_tag="$image:${GITHUB_SHA}"
+
+          docker build -t "$sha_tag" .
+          docker push "$sha_tag"
+
+          if [ -n "$RELEASE_TAG" ]; then
+            docker tag "$sha_tag" "$image:$RELEASE_TAG"
+            docker push "$image:$RELEASE_TAG"
+          elif [ "$GITHUB_REF" = "refs/heads/main" ]; then
+            docker tag "$sha_tag" "$image:latest"
+            docker push "$image:latest"
+          fi
