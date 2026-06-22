@@ -1,11 +1,18 @@
 #!/usr/bin/env python3
-"""Generate and optionally install a Codex plugin for any Mem0 OSS MCP URL."""
+"""Generate and optionally install a Codex plugin for any Mem0 OSS MCP URL.
+
+MCP-only installs use this repository's lightweight plugin. Full-experience
+installs copy the official Mem0 plugin from the third_party/mem0 submodule and
+overlay only the Mem0 OSS compatibility files.
+"""
 
 from __future__ import annotations
 
 import argparse
 import json
+import platform
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -17,6 +24,8 @@ from urllib.parse import urlparse
 DEFAULT_MARKETPLACE_NAME = "mem0-oss-local"
 DEFAULT_TOKEN_ENV_VAR = "MEM0_OSS_MCP_TOKEN"
 DEFAULT_SERVER_NAME = "mem0"
+HOOK_TEMPLATE = "codex-hooks.json"
+UPSTREAM_PLUGIN_SUBDIR = "integrations/mem0-plugin"
 
 
 def normalize_name(value: str) -> str:
@@ -36,12 +45,36 @@ def validate_url(value: str) -> str:
     return value.rstrip("/")
 
 
+def validate_env_var(value: str) -> str:
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value):
+        raise ValueError("token env var must be a valid shell environment variable name")
+    return value
+
+
 def default_marketplace_root() -> Path:
     return Path.home() / ".mem0-oss-mcp" / "codex-plugins"
 
 
 def plugin_root_from_script() -> Path:
     return Path(__file__).resolve().parents[1]
+
+
+def repo_root_from_script() -> Path:
+    return Path(__file__).resolve().parents[3]
+
+
+def default_upstream_plugin_dir() -> Path:
+    return repo_root_from_script() / "third_party" / "mem0" / UPSTREAM_PLUGIN_SUBDIR
+
+
+def validate_upstream_plugin_dir(path: Path) -> Path:
+    plugin_dir = path.expanduser().resolve()
+    if (plugin_dir / ".codex-plugin" / "plugin.json").is_file():
+        return plugin_dir
+    nested = plugin_dir / UPSTREAM_PLUGIN_SUBDIR
+    if (nested / ".codex-plugin" / "plugin.json").is_file():
+        return nested.resolve()
+    raise ValueError(f"not a Mem0 plugin directory: {path}")
 
 
 def copy_plugin(source: Path, target: Path) -> None:
@@ -77,6 +110,18 @@ def write_json(path: Path, data: dict) -> None:
         handle.write("\n")
 
 
+def iter_hook_commands(config: dict):
+    for entries in (config.get("hooks") or {}).values():
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            for hook in entry.get("hooks", []):
+                if isinstance(hook, dict):
+                    yield hook
+
+
 def update_plugin_manifest(plugin_root: Path, plugin_name: str, display_name: str) -> None:
     manifest_path = plugin_root / ".codex-plugin" / "plugin.json"
     manifest = load_json(manifest_path)
@@ -98,17 +143,51 @@ def update_plugin_manifest(plugin_root: Path, plugin_name: str, display_name: st
 
 
 def write_mcp_config(plugin_root: Path, server_name: str, url: str, token_env_var: str) -> None:
-    write_json(
-        plugin_root / ".mcp.json",
-        {
-            "mcpServers": {
-                server_name: {
-                    "url": url,
-                    "bearer_token_env_var": token_env_var,
-                }
+    config = {
+        "mcpServers": {
+            server_name: {
+                "url": url,
+                "bearer_token_env_var": token_env_var,
             }
-        },
-    )
+        }
+    }
+    write_json(plugin_root / ".mcp.json", config)
+    write_json(plugin_root / ".codex-mcp.json", config)
+
+
+def merge_local_oss_skill(source_root: Path, target_root: Path) -> None:
+    source_skill = source_root / "skills" / "mem0-oss"
+    if not source_skill.is_dir():
+        return
+    target_skill = target_root / "skills" / "mem0-oss"
+    if target_skill.exists():
+        shutil.rmtree(target_skill)
+    shutil.copytree(source_skill, target_skill)
+
+
+def copy_adapter_file(source: Path, target: Path, executable: bool = False) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, target)
+    if executable:
+        target.chmod(0o755)
+
+
+def write_oss_adapter(source_root: Path, plugin_root: Path) -> None:
+    adapter_root = source_root / "scripts" / "oss_adapter"
+    scripts_dir = plugin_root / "scripts"
+    copy_adapter_file(adapter_root / "sitecustomize.py", scripts_dir / "sitecustomize.py")
+    copy_adapter_file(adapter_root / "mem0_oss_env.sh", scripts_dir / "mem0_oss_env.sh", executable=True)
+
+    # These upstream background helpers are Platform-specific. Replacing the
+    # generated copies avoids reaching api.mem0.ai while keeping upstream hook
+    # scripts otherwise intact.
+    for script in ("auto_import.py", "auto_setup_categories.py"):
+        if (scripts_dir / script).exists():
+            copy_adapter_file(adapter_root / "noop_platform_setup.py", scripts_dir / script, executable=True)
+
+    onboard = plugin_root / "skills" / "onboard" / "SKILL.md"
+    if onboard.exists():
+        copy_adapter_file(adapter_root / "onboard" / "SKILL.md", onboard)
 
 
 def update_marketplace(root: Path, marketplace_name: str, plugin_name: str) -> Path:
@@ -145,6 +224,146 @@ def update_marketplace(root: Path, marketplace_name: str, plugin_name: str) -> P
     return marketplace_path
 
 
+def codex_dir_default() -> Path:
+    return Path.home() / ".codex"
+
+
+def load_hooks(path: Path) -> dict:
+    if not path.exists():
+        return {"hooks": {}}
+    return load_json(path)
+
+
+def command_env(name: str, value: str) -> str:
+    return f"{name}={shlex.quote(value)}"
+
+
+def load_hook_template(
+    plugin_root: Path,
+    plugin_name: str,
+    url: str,
+    token_env_var: str,
+    env_file: Path | None,
+) -> dict:
+    template_path = plugin_root / "hooks" / HOOK_TEMPLATE
+    raw = template_path.read_text(encoding="utf-8")
+    raw = raw.replace("${PLUGIN_ROOT}", shlex.quote(str(plugin_root)))
+    template = json.loads(raw)
+
+    scripts_dir = plugin_root / "scripts"
+    prelude_parts = [
+        f"export {command_env('MEM0_OSS_PLUGIN', plugin_name)}",
+        f"export {command_env('MEM0_OSS_MCP_URL', url)}",
+        f"export {command_env('MEM0_OSS_MCP_TOKEN_ENV_VAR', token_env_var)}",
+        "export MEM0_TELEMETRY=false",
+        f"export PYTHONPATH={shlex.quote(str(scripts_dir))}:${{PYTHONPATH:-}}",
+    ]
+    if env_file is not None:
+        prelude_parts.append(f"export {command_env('MEM0_OSS_ENV_FILE', str(env_file))}")
+    prelude_parts.append(f". {shlex.quote(str(scripts_dir / 'mem0_oss_env.sh'))}")
+    prelude = "; ".join(prelude_parts)
+
+    for hook in iter_hook_commands(template):
+        command = hook.get("command")
+        if isinstance(command, str):
+            hook["command"] = f"bash -lc {shlex.quote(prelude + '; ' + command)}"
+    return template
+
+
+def is_owned_hook_entry(entry: dict, plugin_name: str, plugin_root: Path) -> bool:
+    markers = (
+        f"MEM0_OSS_PLUGIN={plugin_name}",
+        f"MEM0_OSS_PLUGIN='{plugin_name}'",
+        f"{plugin_root}/scripts/",
+        f"{shlex.quote(str(plugin_root))}/scripts/",
+    )
+    for hook in entry.get("hooks", []):
+        command = hook.get("command", "") if isinstance(hook, dict) else ""
+        if any(marker in command for marker in markers):
+            return True
+    return False
+
+
+def strip_owned_hooks(config: dict, plugin_name: str, plugin_root: Path) -> dict:
+    hooks = config.setdefault("hooks", {})
+    for event in list(hooks):
+        entries = hooks[event]
+        if not isinstance(entries, list):
+            continue
+        hooks[event] = [entry for entry in entries if not is_owned_hook_entry(entry, plugin_name, plugin_root)]
+        if not hooks[event]:
+            del hooks[event]
+    return config
+
+
+def merge_hooks(config: dict, template: dict) -> dict:
+    hooks = config.setdefault("hooks", {})
+    for event, entries in (template.get("hooks") or {}).items():
+        hooks.setdefault(event, []).extend(entries)
+    return config
+
+
+def enable_codex_hooks_feature(config_file: Path) -> None:
+    if config_file.exists():
+        lines = config_file.read_text(encoding="utf-8").splitlines()
+    else:
+        lines = []
+
+    in_features = False
+    features_line: int | None = None
+    codex_hooks_line: int | None = None
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            in_features = stripped == "[features]"
+            if in_features:
+                features_line = index
+            continue
+        if in_features and re.match(r"\s*codex_hooks\s*=", line):
+            codex_hooks_line = index
+            break
+
+    if codex_hooks_line is not None:
+        lines[codex_hooks_line] = "codex_hooks = true"
+    elif features_line is not None:
+        lines.insert(features_line + 1, "codex_hooks = true")
+    else:
+        if lines and lines[-1].strip():
+            lines.append("")
+        lines.extend(["[features]", "codex_hooks = true"])
+
+    config_file.parent.mkdir(parents=True, exist_ok=True)
+    config_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def install_hooks(
+    plugin_root: Path,
+    plugin_name: str,
+    url: str,
+    token_env_var: str,
+    codex_dir: Path,
+    env_file: Path | None,
+    enable_feature: bool,
+) -> Path:
+    if platform.system() == "Windows":
+        raise RuntimeError("Codex hooks use bash scripts; install them from WSL or another Unix-like shell")
+
+    if env_file is not None and not env_file.is_file():
+        raise ValueError(f"--env-file does not exist: {env_file}")
+
+    hooks_file = codex_dir / "hooks.json"
+    config = load_hooks(hooks_file)
+    template = load_hook_template(plugin_root, plugin_name, url, token_env_var, env_file)
+    config = strip_owned_hooks(config, plugin_name, plugin_root)
+    config = merge_hooks(config, template)
+    write_json(hooks_file, config)
+
+    if enable_feature:
+        enable_codex_hooks_feature(codex_dir / "config.toml")
+
+    return hooks_file
+
+
 def run_codex_install(root: Path, marketplace_name: str, plugin_name: str) -> None:
     subprocess.run(["codex", "plugin", "marketplace", "add", str(root)], check=True)
     subprocess.run(["codex", "plugin", "add", f"{plugin_name}@{marketplace_name}"], check=True)
@@ -159,6 +378,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--token-env-var", default=DEFAULT_TOKEN_ENV_VAR, help="Bearer token env var name")
     parser.add_argument("--marketplace-name", default=DEFAULT_MARKETPLACE_NAME, help="Local marketplace name")
     parser.add_argument("--marketplace-root", type=Path, default=default_marketplace_root(), help="Local marketplace root")
+    parser.add_argument(
+        "--with-hooks",
+        action="store_true",
+        help="Generate from the official Mem0 plugin and install Codex lifecycle hooks",
+    )
+    parser.add_argument(
+        "--upstream-plugin-dir",
+        type=Path,
+        default=default_upstream_plugin_dir(),
+        help="Official mem0 plugin directory, or a mem0 repo checkout containing integrations/mem0-plugin",
+    )
+    parser.add_argument("--codex-dir", type=Path, default=codex_dir_default(), help="Codex config directory for hooks")
+    parser.add_argument("--env-file", type=Path, help="Optional dotenv file hooks can read for the token env var")
+    parser.add_argument(
+        "--no-enable-codex-hooks",
+        action="store_true",
+        help="Write hooks.json but do not set [features].codex_hooks = true",
+    )
     parser.add_argument("--install", action="store_true", help="Run codex plugin marketplace add and codex plugin add")
     return parser.parse_args()
 
@@ -169,21 +406,56 @@ def main() -> int:
     server_name = normalize_name(args.server_name)
     marketplace_name = normalize_name(args.marketplace_name)
     url = validate_url(args.url)
+    token_env_var = validate_env_var(args.token_env_var)
     display_name = args.display_name or " ".join(part.capitalize() for part in plugin_name.split("-"))
 
-    source_root = plugin_root_from_script()
+    local_source_root = plugin_root_from_script()
     marketplace_root = args.marketplace_root.expanduser().resolve()
     target_root = marketplace_root / "plugins" / plugin_name
+    codex_dir = args.codex_dir.expanduser().resolve()
+    env_file = args.env_file.expanduser().resolve() if args.env_file else None
+
+    upstream_dir = args.upstream_plugin_dir.expanduser().resolve()
+    default_upstream_dir = default_upstream_plugin_dir().resolve()
+    using_upstream = args.with_hooks or upstream_dir != default_upstream_dir
+    if using_upstream:
+        source_root = validate_upstream_plugin_dir(upstream_dir)
+        source_label = str(source_root)
+    else:
+        source_root = local_source_root
+        source_label = "bundled MCP-only plugin"
 
     copy_plugin(source_root, target_root)
+    if using_upstream:
+        merge_local_oss_skill(local_source_root, target_root)
+        write_oss_adapter(local_source_root, target_root)
+
     update_plugin_manifest(target_root, plugin_name, display_name)
-    write_mcp_config(target_root, server_name, url, args.token_env_var)
+    write_mcp_config(target_root, server_name, url, token_env_var)
     marketplace_path = update_marketplace(marketplace_root, marketplace_name, plugin_name)
+    hooks_path: Path | None = None
+
+    if args.with_hooks:
+        hooks_path = install_hooks(
+            target_root,
+            plugin_name,
+            url,
+            token_env_var,
+            codex_dir,
+            env_file,
+            enable_feature=not args.no_enable_codex_hooks,
+        )
 
     print(f"Generated plugin: {target_root}")
+    print(f"Source: {source_label}")
     print(f"Marketplace: {marketplace_path}")
     print(f"MCP URL: {url}")
-    print(f"Token env var: {args.token_env_var}")
+    print(f"Token env var: {token_env_var}")
+    if hooks_path is not None:
+        print(f"Hooks: {hooks_path}")
+        print(f"Codex hooks feature: {'unchanged' if args.no_enable_codex_hooks else 'enabled'}")
+        if env_file is not None:
+            print(f"Hook env file: {env_file}")
 
     if args.install:
         run_codex_install(marketplace_root, marketplace_name, plugin_name)

@@ -61,6 +61,40 @@ The installer writes a local marketplace under
 installs it through `codex plugin add`. It never writes token values to disk;
 configure the named token environment variable in the process that runs Codex.
 
+For the full official Mem0 Codex plugin experience, including skills and
+lifecycle hooks, use the official Mem0 repository submodule as the upstream
+plugin source:
+
+```bash
+git submodule update --init --depth 1 third_party/mem0
+
+python3 plugins/mem0-oss/scripts/install_codex_plugin.py \
+  --url http://192.168.2.202:38080/mcp \
+  --token-env-var MEM0_OSS_MCP_TOKEN \
+  --with-hooks \
+  --env-file /path/to/bridge.env \
+  --install
+```
+
+`--with-hooks` copies `third_party/mem0/integrations/mem0-plugin` into the
+generated local marketplace, adds a small Mem0 OSS compatibility layer, and
+merges the official Codex hook entries into `~/.codex/hooks.json`. Official
+hook and skill files stay in the submodule, not vendored into this repository.
+To upgrade them:
+
+```bash
+git -C third_party/mem0 fetch origin
+git -C third_party/mem0 checkout origin/main
+git add third_party/mem0
+```
+
+Then rerun `install_codex_plugin.py` so the generated local marketplace copy and
+hook paths are refreshed.
+
+`--env-file` is optional and is only read by hook scripts at runtime. Direct MCP
+tools in Codex still require the token env var named by `--token-env-var` to be
+present in the Codex process environment before starting a new thread.
+
 Multiple instances can use different plugin IDs and token variables:
 
 ```bash
@@ -69,6 +103,8 @@ python3 plugins/mem0-oss/scripts/install_codex_plugin.py \
   --display-name "Mem0 Home" \
   --url https://mem0-home.example.com:18443/mcp \
   --token-env-var MEM0_HOME_MCP_TOKEN \
+  --with-hooks \
+  --env-file /path/to/bridge.env \
   --install
 ```
 
