@@ -24,7 +24,8 @@ def make_upstream_fixture(root: Path) -> Path:
             "version": "9.9.9",
             "description": "Official fixture",
             "skills": "./skills/",
-            "mcpServers": "./.mcp.json",
+            "mcpServers": "./.codex-mcp.json",
+            "hooks": "./hooks/codex-hooks.json",
             "interface": {"displayName": "Mem0"},
         },
     )
@@ -134,9 +135,15 @@ def test_installer_generates_full_experience_from_upstream_fixture(tmp_path: Pat
     plugin_root = marketplace_root / "plugins" / "mem0-example"
     assert (plugin_root / "scripts" / "sitecustomize.py").is_file()
     assert (plugin_root / "scripts" / "mem0_oss_env.sh").is_file()
-    assert "No-op for generated Mem0 OSS plugins" in (plugin_root / "scripts" / "auto_import.py").read_text()
+    assert "No-op replacement for hosted Mem0 Platform setup helpers" in (
+        plugin_root / "scripts" / "auto_import.py"
+    ).read_text()
     assert "Mem0 OSS Onboarding" in (plugin_root / "skills" / "onboard" / "SKILL.md").read_text()
     assert (plugin_root / "skills" / "mem0-oss" / "SKILL.md").is_file()
+
+    manifest = json.loads((plugin_root / ".codex-plugin" / "plugin.json").read_text())
+    assert manifest["mcpServers"] == "./.mcp.json"
+    assert "hooks" not in manifest
 
     mcp = json.loads((plugin_root / ".codex-mcp.json").read_text())
     server = mcp["mcpServers"]["mem0"]
@@ -147,7 +154,7 @@ def test_installer_generates_full_experience_from_upstream_fixture(tmp_path: Pat
     entries = hooks["hooks"]["SessionStart"]
     assert len(entries) == 1
     command = entries[0]["hooks"][0]["command"]
-    assert command.startswith("bash -lc ")
+    assert command.startswith("bash -c ")
     assert "${PLUGIN_ROOT}" not in command
     assert "MEM0_OSS_PLUGIN=mem0-example" in command
     assert "MEM0_OSS_MCP_URL=https://mem0.example.test:18443/mcp" in command

@@ -139,6 +139,8 @@ def update_plugin_manifest(plugin_root: Path, plugin_name: str, display_name: st
         "This generated local copy points at your chosen bridge URL without "
         "committing hosts, ports, or tokens to the source repository."
     )
+    manifest["mcpServers"] = "./.mcp.json"
+    manifest.pop("hooks", None)
     write_json(manifest_path, manifest)
 
 
@@ -266,7 +268,7 @@ def load_hook_template(
     for hook in iter_hook_commands(template):
         command = hook.get("command")
         if isinstance(command, str):
-            hook["command"] = f"bash -lc {shlex.quote(prelude + '; ' + command)}"
+            hook["command"] = f"bash -c {shlex.quote(prelude + '; ' + command)}"
     return template
 
 

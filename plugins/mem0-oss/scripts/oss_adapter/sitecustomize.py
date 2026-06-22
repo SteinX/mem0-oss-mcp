@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -201,7 +202,7 @@ def dispatch_platform_call(parsed: urllib.parse.ParseResult, method: str, body: 
     raise RuntimeError(f"unsupported Mem0 Platform endpoint in OSS adapter: {parsed.geturl()}")
 
 
-def urlopen(request: Any, data: Any = None, timeout: Any = urllib.request._GLOBAL_DEFAULT_TIMEOUT, *args, **kwargs):
+def urlopen(request: Any, data: Any = None, timeout: Any = socket._GLOBAL_DEFAULT_TIMEOUT, *args, **kwargs):
     url = request_url(request)
     parsed = urllib.parse.urlparse(url)
     if parsed.netloc != MEM0_PLATFORM_HOST:
