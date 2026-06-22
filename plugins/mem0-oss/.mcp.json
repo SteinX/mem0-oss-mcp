@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "mem0": {
+      "url": "http://127.0.0.1:8080/mcp",
+      "bearer_token_env_var": "MEM0_OSS_MCP_TOKEN"
+    }
+  }
+}
