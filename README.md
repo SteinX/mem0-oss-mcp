@@ -47,19 +47,25 @@ The default plugin points at `http://127.0.0.1:8080/mcp` and reads its bearer
 token from `MEM0_OSS_MCP_TOKEN`.
 
 For any other host, port, domain, or token environment variable, generate a
-local plugin instance instead of editing files in this repository:
+local plugin instance instead of editing files in this repository. Passing
+`--env-file` is recommended for Codex Desktop: the generated MCP config runs a
+local stdio bridge that reads the token from the dotenv file and forwards
+JSON-RPC to the HTTP MCP endpoint, so the Codex process does not need a custom
+environment variable.
 
 ```bash
 python3 plugins/mem0-oss/scripts/install_codex_plugin.py \
   --url http://192.168.2.202:38080/mcp \
   --token-env-var MEM0_OSS_MCP_TOKEN \
+  --env-file /path/to/bridge.env \
   --install
 ```
 
 The installer writes a local marketplace under
 `~/.mem0-oss-mcp/codex-plugins`, patches only that generated copy, and then
-installs it through `codex plugin add`. It never writes token values to disk;
-configure the named token environment variable in the process that runs Codex.
+installs it through `codex plugin add`. It never writes token values into the
+plugin config; the dotenv file should contain the named token variable, for
+example `MEM0_OSS_MCP_TOKEN=change-me`.
 
 For the full official Mem0 Codex plugin experience, including skills and
 lifecycle hooks, use the official Mem0 repository submodule as the upstream
@@ -91,9 +97,10 @@ git add third_party/mem0
 Then rerun `install_codex_plugin.py` so the generated local marketplace copy and
 hook paths are refreshed.
 
-`--env-file` is optional and is only read by hook scripts at runtime. Direct MCP
-tools in Codex still require the token env var named by `--token-env-var` to be
-present in the Codex process environment before starting a new thread.
+The default `--mcp-transport auto` chooses stdio when `--env-file` is present.
+Use `--mcp-transport http` only when you explicitly want direct HTTP MCP config
+with `bearer_token_env_var`; in that mode, Codex must receive the named token
+environment variable before a new thread starts.
 
 Multiple instances can use different plugin IDs and token variables:
 

@@ -10,17 +10,31 @@ url = "http://127.0.0.1:8080/mcp"
 bearer_token_env_var = "MEM0_OSS_MCP_TOKEN"
 ```
 
-For another host or port, generate a local plugin instance:
+For another host or port, generate a local plugin instance. When you pass
+`--env-file`, the generated MCP config uses a local stdio bridge that reads the
+token from that dotenv file and forwards requests to the HTTP MCP endpoint.
+This is the recommended mode for Codex Desktop because it does not require
+custom environment variables in the Codex process:
 
 ```bash
 python3 plugins/mem0-oss/scripts/install_codex_plugin.py \
   --url http://192.168.2.202:38080/mcp \
+  --env-file /path/to/bridge.env \
   --install
 ```
 
 The installer writes a local marketplace under `~/.mem0-oss-mcp/codex-plugins`
-and rewrites only the generated copy. It stores the token variable name, not
-the token value. Set `MEM0_OSS_MCP_TOKEN` in the environment where Codex runs.
+and rewrites only the generated copy. It stores the env-file path and token
+variable name in `.mcp.json`, not the token value. The env file should contain
+the token variable, for example:
+
+```dotenv
+MEM0_OSS_MCP_TOKEN=change-me
+```
+
+If you omit `--env-file`, the installer preserves the direct HTTP MCP config
+and Codex must receive `MEM0_OSS_MCP_TOKEN` in its process environment before a
+new thread starts.
 
 For the full official Mem0 Codex plugin experience, including skills and
 lifecycle hooks, initialize the official Mem0 submodule and generate from it:
@@ -52,3 +66,7 @@ python3 plugins/mem0-oss/scripts/install_codex_plugin.py \
   --env-file /path/to/bridge.env \
   --install
 ```
+
+Use `--mcp-transport http` only when you explicitly want Codex to connect to
+the HTTP MCP endpoint directly through `bearer_token_env_var`. The default
+`--mcp-transport auto` chooses stdio when `--env-file` is present.

@@ -103,6 +103,47 @@ def test_installer_generates_local_marketplace(tmp_path: Path) -> None:
     assert server["bearer_token_env_var"] == "MEM0_EXAMPLE_TOKEN"
 
 
+def test_installer_uses_stdio_bridge_when_env_file_is_set(tmp_path: Path) -> None:
+    marketplace_root = tmp_path / "codex-plugins"
+    env_file = tmp_path / "bridge.env"
+    env_file.write_text("MEM0_EXAMPLE_TOKEN=test-token\n", encoding="utf-8")
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(INSTALLER),
+            "--url",
+            "https://mem0.example.test:18443/mcp",
+            "--name",
+            "mem0-example",
+            "--token-env-var",
+            "MEM0_EXAMPLE_TOKEN",
+            "--marketplace-root",
+            str(marketplace_root),
+            "--env-file",
+            str(env_file),
+        ],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    plugin_root = marketplace_root / "plugins" / "mem0-example"
+    assert (plugin_root / "scripts" / "mem0_oss_stdio_bridge.py").is_file()
+
+    mcp = json.loads((plugin_root / ".mcp.json").read_text())
+    server = mcp["mcpServers"]["mem0"]
+    assert server["command"] == "python3"
+    assert server["args"] == [str(plugin_root / "scripts" / "mem0_oss_stdio_bridge.py")]
+    assert server["env"] == {
+        "MEM0_OSS_MCP_URL": "https://mem0.example.test:18443/mcp",
+        "MEM0_OSS_MCP_TOKEN_ENV_VAR": "MEM0_EXAMPLE_TOKEN",
+        "MEM0_OSS_ENV_FILE": str(env_file),
+    }
+    assert "url" not in server
+    assert "bearer_token_env_var" not in server
+
+
 def test_installer_generates_full_experience_from_upstream_fixture(tmp_path: Path) -> None:
     marketplace_root = tmp_path / "codex-plugins"
     codex_dir = tmp_path / ".codex"
@@ -147,8 +188,10 @@ def test_installer_generates_full_experience_from_upstream_fixture(tmp_path: Pat
 
     mcp = json.loads((plugin_root / ".codex-mcp.json").read_text())
     server = mcp["mcpServers"]["mem0"]
-    assert server["url"] == "https://mem0.example.test:18443/mcp"
-    assert server["bearer_token_env_var"] == "MEM0_EXAMPLE_TOKEN"
+    assert server["command"] == "python3"
+    assert server["env"]["MEM0_OSS_MCP_URL"] == "https://mem0.example.test:18443/mcp"
+    assert server["env"]["MEM0_OSS_MCP_TOKEN_ENV_VAR"] == "MEM0_EXAMPLE_TOKEN"
+    assert server["env"]["MEM0_OSS_ENV_FILE"] == str(env_file)
 
     hooks = json.loads((codex_dir / "hooks.json").read_text())
     entries = hooks["hooks"]["SessionStart"]

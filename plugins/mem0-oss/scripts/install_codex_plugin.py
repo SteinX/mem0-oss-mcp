@@ -26,6 +26,7 @@ DEFAULT_TOKEN_ENV_VAR = "MEM0_OSS_MCP_TOKEN"
 DEFAULT_SERVER_NAME = "mem0"
 HOOK_TEMPLATE = "codex-hooks.json"
 UPSTREAM_PLUGIN_SUBDIR = "integrations/mem0-plugin"
+MCP_TRANSPORTS = {"auto", "http", "stdio"}
 
 
 def normalize_name(value: str) -> str:
@@ -144,17 +145,52 @@ def update_plugin_manifest(plugin_root: Path, plugin_name: str, display_name: st
     write_json(manifest_path, manifest)
 
 
-def write_mcp_config(plugin_root: Path, server_name: str, url: str, token_env_var: str) -> None:
-    config = {
-        "mcpServers": {
-            server_name: {
-                "url": url,
-                "bearer_token_env_var": token_env_var,
+def selected_mcp_transport(requested: str, env_file: Path | None) -> str:
+    if requested not in MCP_TRANSPORTS:
+        raise ValueError(f"--mcp-transport must be one of: {', '.join(sorted(MCP_TRANSPORTS))}")
+    if requested == "auto":
+        return "stdio" if env_file is not None else "http"
+    if requested == "stdio" and env_file is None:
+        raise ValueError("--mcp-transport stdio requires --env-file")
+    return requested
+
+
+def write_mcp_config(
+    plugin_root: Path,
+    server_name: str,
+    url: str,
+    token_env_var: str,
+    env_file: Path | None,
+    mcp_transport: str,
+) -> str:
+    transport = selected_mcp_transport(mcp_transport, env_file)
+    if transport == "stdio":
+        bridge = plugin_root / "scripts" / "mem0_oss_stdio_bridge.py"
+        config = {
+            "mcpServers": {
+                server_name: {
+                    "command": "python3",
+                    "args": [str(bridge)],
+                    "env": {
+                        "MEM0_OSS_MCP_URL": url,
+                        "MEM0_OSS_MCP_TOKEN_ENV_VAR": token_env_var,
+                        "MEM0_OSS_ENV_FILE": str(env_file),
+                    },
+                }
             }
         }
-    }
+    else:
+        config = {
+            "mcpServers": {
+                server_name: {
+                    "url": url,
+                    "bearer_token_env_var": token_env_var,
+                }
+            }
+        }
     write_json(plugin_root / ".mcp.json", config)
     write_json(plugin_root / ".codex-mcp.json", config)
+    return transport
 
 
 def merge_local_oss_skill(source_root: Path, target_root: Path) -> None:
@@ -174,11 +210,21 @@ def copy_adapter_file(source: Path, target: Path, executable: bool = False) -> N
         target.chmod(0o755)
 
 
+def write_stdio_bridge(source_root: Path, plugin_root: Path) -> None:
+    adapter_root = source_root / "scripts" / "oss_adapter"
+    copy_adapter_file(
+        adapter_root / "mem0_oss_stdio_bridge.py",
+        plugin_root / "scripts" / "mem0_oss_stdio_bridge.py",
+        executable=True,
+    )
+
+
 def write_oss_adapter(source_root: Path, plugin_root: Path) -> None:
     adapter_root = source_root / "scripts" / "oss_adapter"
     scripts_dir = plugin_root / "scripts"
     copy_adapter_file(adapter_root / "sitecustomize.py", scripts_dir / "sitecustomize.py")
     copy_adapter_file(adapter_root / "mem0_oss_env.sh", scripts_dir / "mem0_oss_env.sh", executable=True)
+    write_stdio_bridge(source_root, plugin_root)
 
     # These upstream background helpers are Platform-specific. Replacing the
     # generated copies avoids reaching api.mem0.ai while keeping upstream hook
@@ -392,7 +438,17 @@ def parse_args() -> argparse.Namespace:
         help="Official mem0 plugin directory, or a mem0 repo checkout containing integrations/mem0-plugin",
     )
     parser.add_argument("--codex-dir", type=Path, default=codex_dir_default(), help="Codex config directory for hooks")
-    parser.add_argument("--env-file", type=Path, help="Optional dotenv file hooks can read for the token env var")
+    parser.add_argument(
+        "--env-file",
+        type=Path,
+        help="Optional dotenv file used by hooks and, in auto/stdio transport, the MCP stdio bridge",
+    )
+    parser.add_argument(
+        "--mcp-transport",
+        choices=sorted(MCP_TRANSPORTS),
+        default="auto",
+        help="MCP connection mode. auto uses stdio when --env-file is set, otherwise http.",
+    )
     parser.add_argument(
         "--no-enable-codex-hooks",
         action="store_true",
@@ -416,6 +472,7 @@ def main() -> int:
     target_root = marketplace_root / "plugins" / plugin_name
     codex_dir = args.codex_dir.expanduser().resolve()
     env_file = args.env_file.expanduser().resolve() if args.env_file else None
+    mcp_transport = selected_mcp_transport(args.mcp_transport, env_file)
 
     upstream_dir = args.upstream_plugin_dir.expanduser().resolve()
     default_upstream_dir = default_upstream_plugin_dir().resolve()
@@ -431,9 +488,11 @@ def main() -> int:
     if using_upstream:
         merge_local_oss_skill(local_source_root, target_root)
         write_oss_adapter(local_source_root, target_root)
+    elif mcp_transport == "stdio":
+        write_stdio_bridge(local_source_root, target_root)
 
     update_plugin_manifest(target_root, plugin_name, display_name)
-    write_mcp_config(target_root, server_name, url, token_env_var)
+    mcp_transport = write_mcp_config(target_root, server_name, url, token_env_var, env_file, mcp_transport)
     marketplace_path = update_marketplace(marketplace_root, marketplace_name, plugin_name)
     hooks_path: Path | None = None
 
@@ -452,6 +511,7 @@ def main() -> int:
     print(f"Source: {source_label}")
     print(f"Marketplace: {marketplace_path}")
     print(f"MCP URL: {url}")
+    print(f"MCP transport: {mcp_transport}")
     print(f"Token env var: {token_env_var}")
     if hooks_path is not None:
         print(f"Hooks: {hooks_path}")
