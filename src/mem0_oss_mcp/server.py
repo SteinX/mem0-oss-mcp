@@ -106,11 +106,23 @@ def _filter_values(filters: Any) -> JSON:
 
 
 def normalize_filters(filters: Any) -> Any:
-    """Flatten platform-style metadata filters to OSS payload filters."""
+    """Flatten platform-style filters to OSS payload filters where possible."""
     if isinstance(filters, list):
         return [normalize_filters(item) for item in filters]
     if not isinstance(filters, dict):
         return filters
+
+    keys = set(filters)
+    if keys == {"AND"} and isinstance(filters.get("AND"), list):
+        normalized_items = [normalize_filters(item) for item in filters["AND"]]
+        merged = _merge_flat_filters(normalized_items)
+        return merged if merged is not None else {"AND": normalized_items}
+
+    if keys == {"OR"} and isinstance(filters.get("OR"), list) and len(filters["OR"]) == 1:
+        normalized_item = normalize_filters(filters["OR"][0])
+        if isinstance(normalized_item, dict):
+            return normalized_item
+        return {"OR": [normalized_item]}
 
     out: JSON = {}
     for key, value in filters.items():
@@ -118,9 +130,23 @@ def normalize_filters(filters: Any) -> Any:
             out[key] = normalize_filters(value)
         elif key == "metadata" and isinstance(value, dict):
             out.update(value)
+        elif isinstance(value, dict) and set(value) == {"eq"}:
+            out[key] = value["eq"]
         else:
             out[key] = normalize_filters(value)
     return out
+
+
+def _merge_flat_filters(items: list[Any]) -> JSON | None:
+    merged: JSON = {}
+    for item in items:
+        if not isinstance(item, dict) or any(key in item for key in ("AND", "OR", "NOT")):
+            return None
+        for key, value in item.items():
+            if key in merged and merged[key] != value:
+                return None
+            merged[key] = value
+    return merged
 
 
 def _memory_app_id(memory: JSON) -> Any:

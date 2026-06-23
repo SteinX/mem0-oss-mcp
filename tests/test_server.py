@@ -19,8 +19,48 @@ class MappingTests(unittest.TestCase):
         }
         self.assertEqual(
             server.normalize_filters(filters),
-            {"AND": [{"user_id": "u1"}, {"app_id": "repo"}, {"type": "decision"}]},
+            {"user_id": "u1", "app_id": "repo", "type": "decision"},
         )
+
+    def test_normalize_filters_preserves_complex_filters(self):
+        filters = {"AND": [{"user_id": "u1"}, {"OR": [{"app_id": "repo"}, {"app_id": "other"}]}]}
+        self.assertEqual(
+            server.normalize_filters(filters),
+            {"AND": [{"user_id": "u1"}, {"OR": [{"app_id": "repo"}, {"app_id": "other"}]}]},
+        )
+
+    def test_normalize_filters_collapses_single_or(self):
+        self.assertEqual(server.normalize_filters({"OR": [{"user_id": "*"}]}), {"user_id": "*"})
+
+    def test_search_memories_flattens_platform_filters_for_backend(self):
+        captured = {}
+        original_backend = server._backend
+
+        def fake_backend(method, path, body=None, query=None):
+            captured.update({"method": method, "path": path, "body": body, "query": query})
+            return {"results": []}
+
+        server._backend = fake_backend
+        try:
+            server.search_memories(
+                {
+                    "query": "q",
+                    "filters": {
+                        "AND": [
+                            {"user_id": "u1"},
+                            {"app_id": "repo"},
+                            {"metadata": {"type": "decision"}},
+                        ]
+                    },
+                    "top_k": 1,
+                }
+            )
+        finally:
+            server._backend = original_backend
+
+        self.assertEqual(captured["method"], "POST")
+        self.assertEqual(captured["path"], "/search")
+        self.assertEqual(captured["body"]["filters"], {"user_id": "u1", "app_id": "repo", "type": "decision"})
 
     def test_get_memories_filter_values_match_app_id_from_metadata(self):
         memory = {"id": "1", "metadata": {"app_id": "repo", "type": "decision"}}
