@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import subprocess
 import sys
@@ -77,6 +78,26 @@ def test_sitecustomize_requires_mcp_url(monkeypatch) -> None:
 
     with pytest.raises(RuntimeError, match="MEM0_OSS_MCP_URL is not set"):
         adapter.call_tool("search_memories", {})
+
+
+def test_sitecustomize_preserves_urlopen_timeout(monkeypatch) -> None:
+    adapter = load_adapter()
+    calls = []
+
+    def fake_dispatch(parsed, method, body, timeout=None):
+        calls.append((parsed.path, method, body, timeout))
+        return {"ok": True}
+
+    monkeypatch.setattr(adapter, "dispatch_platform_call", fake_dispatch)
+    request = urllib.request.Request(
+        "https://api.mem0.ai/v3/memories/search",
+        data=b'{"user_id":"u1"}',
+    )
+
+    response = adapter.urlopen(request, timeout=5)
+
+    assert calls == [("/v3/memories/search", "POST", {"user_id": "u1"}, 5)]
+    assert json.loads(response.read().decode("utf-8")) == {"ok": True}
 
 
 def test_sitecustomize_maps_v1_event_status(monkeypatch) -> None:

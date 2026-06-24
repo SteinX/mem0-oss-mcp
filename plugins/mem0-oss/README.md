@@ -17,7 +17,7 @@ file. This avoids requiring custom environment variables in the Codex process:
 
 ```bash
 python3 plugins/mem0-oss/scripts/install_codex_plugin.py \
-  --url http://192.168.2.202:38080/mcp \
+  --url http://<bridge-host>:<bridge-port>/mcp \
   --env-file /path/to/bridge.env \
   --install
 ```
@@ -42,7 +42,7 @@ lifecycle hooks, initialize the official Mem0 submodule and generate from it:
 git submodule update --init --depth 1 third_party/mem0
 
 python3 plugins/mem0-oss/scripts/install_codex_plugin.py \
-  --url http://192.168.2.202:38080/mcp \
+  --url http://<bridge-host>:<bridge-port>/mcp \
   --with-hooks \
   --env-file /path/to/bridge.env \
   --install

@@ -130,7 +130,7 @@ def call_tool(name: str, arguments: dict[str, Any], timeout: float | None = None
         method="POST",
         headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"},
     )
-    with ORIGINAL_URLOPEN(request, timeout=timeout or 15) as response:
+    with ORIGINAL_URLOPEN(request, timeout=15 if timeout is None else timeout) as response:
         envelope = json.loads(response.read().decode("utf-8"))
 
     if "error" in envelope:
@@ -192,37 +192,42 @@ def query_args(parsed: urllib.parse.ParseResult) -> dict[str, Any]:
     return values
 
 
-def dispatch_platform_call(parsed: urllib.parse.ParseResult, method: str, body: dict[str, Any]) -> Any:
+def dispatch_platform_call(
+    parsed: urllib.parse.ParseResult,
+    method: str,
+    body: dict[str, Any],
+    timeout: float | None = None,
+) -> Any:
     path = parsed.path.rstrip("/")
     args = {**body, **query_args(parsed)}
 
     if path == "/v3/memories/add":
-        return call_tool("add_memory", args)
+        return call_tool("add_memory", args, timeout=timeout)
     if path == "/v3/memories/search":
-        return call_tool("search_memories", args)
+        return call_tool("search_memories", args, timeout=timeout)
     if path == "/v3/memories":
         if method == "DELETE":
-            return call_tool("delete_all_memories", args)
-        return call_tool("get_memories", args)
+            return call_tool("delete_all_memories", args, timeout=timeout)
+        return call_tool("get_memories", args, timeout=timeout)
 
     if path.startswith("/v3/memories/"):
         memory_id = urllib.parse.unquote(path.rsplit("/", 1)[-1])
         if memory_id in {"events", "event"}:
-            return call_tool("get_event_status", args)
+            return call_tool("get_event_status", args, timeout=timeout)
         args.setdefault("id", memory_id)
         if method == "DELETE":
-            return call_tool("delete_memory", args)
+            return call_tool("delete_memory", args, timeout=timeout)
         if method in {"PATCH", "PUT"}:
             if "memory" in args and "text" not in args:
                 args["text"] = args["memory"]
-            return call_tool("update_memory", args)
-        return call_tool("get_memory", args)
+            return call_tool("update_memory", args, timeout=timeout)
+        return call_tool("get_memory", args, timeout=timeout)
 
     if path.startswith("/v1/event/") or "/events/" in path:
         args.setdefault("event_id", urllib.parse.unquote(path.rsplit("/", 1)[-1]))
-        return call_tool("get_event_status", args)
+        return call_tool("get_event_status", args, timeout=timeout)
     if path in {"/v1/events", "/v3/events"}:
-        return call_tool("list_events", args)
+        return call_tool("list_events", args, timeout=timeout)
 
     raise RuntimeError(f"unsupported Mem0 Platform endpoint in OSS adapter: {parsed.geturl()}")
 
@@ -233,7 +238,8 @@ def urlopen(request: Any, data: Any = None, timeout: Any = socket._GLOBAL_DEFAUL
     if parsed.netloc != MEM0_PLATFORM_HOST:
         return ORIGINAL_URLOPEN(request, data=data, timeout=timeout, *args, **kwargs)
     try:
-        payload = dispatch_platform_call(parsed, request_method(request), request_body(request, data))
+        request_timeout = None if timeout is socket._GLOBAL_DEFAULT_TIMEOUT else timeout
+        payload = dispatch_platform_call(parsed, request_method(request), request_body(request, data), request_timeout)
     except Exception as exc:
         raise urllib.error.URLError(f"mem0 OSS MCP adapter failed: {exc}") from exc
     return JsonResponse(payload)

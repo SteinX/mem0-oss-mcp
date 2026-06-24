@@ -8,7 +8,7 @@ self-hosted Mem0 REST API.
 ## Configuration
 
 ```env
-MEM0_OSS_BASE_URL=http://192.168.1.20:18080
+MEM0_OSS_BASE_URL=http://<mem0-host>:<mem0-port>
 MEM0_OSS_API_KEY=m0sk_xxx
 
 MEM0_OSS_MCP_HOST=0.0.0.0
@@ -57,7 +57,7 @@ HTTP MCP endpoint.
 
 ```bash
 python3 plugins/mem0-oss/scripts/install_codex_plugin.py \
-  --url http://192.168.2.202:38080/mcp \
+  --url http://<bridge-host>:<bridge-port>/mcp \
   --token-env-var MEM0_OSS_MCP_TOKEN \
   --env-file /path/to/bridge.env \
   --install
@@ -77,7 +77,7 @@ plugin source:
 git submodule update --init --depth 1 third_party/mem0
 
 python3 plugins/mem0-oss/scripts/install_codex_plugin.py \
-  --url http://192.168.2.202:38080/mcp \
+  --url http://<bridge-host>:<bridge-port>/mcp \
   --token-env-var MEM0_OSS_MCP_TOKEN \
   --with-hooks \
   --env-file /path/to/bridge.env \
