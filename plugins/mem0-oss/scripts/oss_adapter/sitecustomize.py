@@ -82,9 +82,6 @@ def resolve_token() -> str:
         return value
     value = dotenv.get(token_env_var, "").strip()
     if value:
-        os.environ.setdefault(token_env_var, value)
-        os.environ.setdefault("MEM0_API_KEY", value)
-        os.environ.setdefault("MEM0_OSS_MCP_TOKEN", value)
         return value
 
     if token_env_var != "MEM0_OSS_MCP_TOKEN":
@@ -93,14 +90,10 @@ def resolve_token() -> str:
             return value
         value = dotenv.get("MEM0_OSS_MCP_TOKEN", "").strip()
         if value:
-            os.environ.setdefault("MEM0_OSS_MCP_TOKEN", value)
-            os.environ.setdefault("MEM0_API_KEY", value)
             return value
 
     value = dotenv.get("MEM0_API_KEY", "").strip()
     if value:
-        os.environ.setdefault("MEM0_API_KEY", value)
-        os.environ.setdefault("MEM0_OSS_MCP_TOKEN", value)
         return value
     value = os.environ.get("MEM0_API_KEY", "").strip()
     if value:

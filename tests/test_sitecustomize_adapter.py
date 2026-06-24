@@ -71,6 +71,25 @@ def test_sitecustomize_prefers_selected_dotenv_token_before_default_env(tmp_path
     assert adapter.resolve_token() == "selected-token"
 
 
+def test_sitecustomize_does_not_cache_dotenv_token_in_environment(tmp_path: Path, monkeypatch) -> None:
+    first_env = tmp_path / "first.env"
+    second_env = tmp_path / "second.env"
+    first_env.write_text("MEM0_EXAMPLE_TOKEN=first-token\n", encoding="utf-8")
+    second_env.write_text("MEM0_EXAMPLE_TOKEN=second-token\n", encoding="utf-8")
+    monkeypatch.setenv("MEM0_OSS_MCP_TOKEN_ENV_VAR", "MEM0_EXAMPLE_TOKEN")
+    monkeypatch.delenv("MEM0_EXAMPLE_TOKEN", raising=False)
+
+    adapter = load_adapter()
+
+    monkeypatch.setenv("MEM0_OSS_ENV_FILE", str(first_env))
+    assert adapter.resolve_token() == "first-token"
+    assert "MEM0_EXAMPLE_TOKEN" not in os.environ
+
+    monkeypatch.setenv("MEM0_OSS_ENV_FILE", str(second_env))
+    assert adapter.resolve_token() == "second-token"
+    assert "MEM0_EXAMPLE_TOKEN" not in os.environ
+
+
 def test_sitecustomize_requires_mcp_url(monkeypatch) -> None:
     adapter = load_adapter()
     monkeypatch.setenv("MEM0_OSS_MCP_TOKEN", "test-token")
