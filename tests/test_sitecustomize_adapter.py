@@ -8,6 +8,8 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ADAPTER_DIR = REPO_ROOT / "plugins" / "mem0-oss" / "scripts" / "oss_adapter"
@@ -53,6 +55,28 @@ def test_sitecustomize_reads_quoted_hash_from_env_file(tmp_path: Path) -> None:
     adapter = load_adapter()
 
     assert adapter.read_dotenv(str(env_file)) == {"MEM0_EXAMPLE_TOKEN": "test#token"}
+
+
+def test_sitecustomize_prefers_selected_dotenv_token_before_default_env(tmp_path: Path, monkeypatch) -> None:
+    env_file = tmp_path / "bridge.env"
+    env_file.write_text("MEM0_EXAMPLE_TOKEN=selected-token\n", encoding="utf-8")
+    monkeypatch.setenv("MEM0_OSS_MCP_TOKEN_ENV_VAR", "MEM0_EXAMPLE_TOKEN")
+    monkeypatch.setenv("MEM0_OSS_ENV_FILE", str(env_file))
+    monkeypatch.setenv("MEM0_OSS_MCP_TOKEN", "default-token")
+    monkeypatch.setenv("MEM0_API_KEY", "cloud-token")
+
+    adapter = load_adapter()
+
+    assert adapter.resolve_token() == "selected-token"
+
+
+def test_sitecustomize_requires_mcp_url(monkeypatch) -> None:
+    adapter = load_adapter()
+    monkeypatch.setenv("MEM0_OSS_MCP_TOKEN", "test-token")
+    monkeypatch.delenv("MEM0_OSS_MCP_URL", raising=False)
+
+    with pytest.raises(RuntimeError, match="MEM0_OSS_MCP_URL is not set"):
+        adapter.call_tool("search_memories", {})
 
 
 def test_sitecustomize_maps_v1_event_status(monkeypatch) -> None:

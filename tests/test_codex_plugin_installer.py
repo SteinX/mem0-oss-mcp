@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -108,6 +109,20 @@ def make_upstream_fixture(root: Path) -> Path:
     onboard.mkdir(parents=True, exist_ok=True)
     (onboard / "SKILL.md").write_text("---\nname: onboard\n---\n# Hosted onboard\n", encoding="utf-8")
     return root
+
+
+def test_repository_plugin_mcp_config_is_env_driven() -> None:
+    mcp_path = REPO_ROOT / "plugins" / "mem0-oss" / ".mcp.json"
+    raw = mcp_path.read_text(encoding="utf-8")
+    mcp = json.loads(raw)
+
+    server = mcp["mcpServers"]["mem0"]
+    assert "127.0.0.1" not in raw
+    assert "8080" not in raw
+    assert "url" not in server
+    assert "bearer_token_env_var" not in server
+    assert server["command"] == "python3"
+    assert server["args"] == ["scripts/oss_adapter/mem0_oss_stdio_bridge.py"]
 
 
 def test_installer_generates_local_marketplace(tmp_path: Path) -> None:
@@ -287,6 +302,45 @@ def test_hook_ownership_matches_exact_plugin_name(tmp_path: Path) -> None:
     assert installer.is_owned_hook_entry(quoted_exact_entry, "mem0-example", plugin_root)
 
 
+def test_installer_handles_quoted_marketplace_path_for_hooks(tmp_path: Path) -> None:
+    marketplace_root = tmp_path / "codex'plugins"
+    codex_dir = tmp_path / ".codex"
+    env_file = tmp_path / "bridge.env"
+    env_file.write_text("MEM0_EXAMPLE_TOKEN=test-token\n", encoding="utf-8")
+    upstream_root = make_upstream_fixture(tmp_path / "mem0-upstream")
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(INSTALLER),
+            "--url",
+            "https://mem0.example.test:18443/mcp",
+            "--name",
+            "mem0-example",
+            "--token-env-var",
+            "MEM0_EXAMPLE_TOKEN",
+            "--marketplace-root",
+            str(marketplace_root),
+            "--with-hooks",
+            "--upstream-plugin-dir",
+            str(upstream_root),
+            "--codex-dir",
+            str(codex_dir),
+            "--env-file",
+            str(env_file),
+        ],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    hooks = json.loads((codex_dir / "hooks.json").read_text())
+    command = hooks["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+    script = shlex.split(command)[2]
+    assert any("codex'plugins" in token for token in shlex.split(script))
+    assert "${PLUGIN_ROOT}" not in command
+
+
 def test_installer_generates_full_experience_from_upstream_fixture(tmp_path: Path) -> None:
     marketplace_root = tmp_path / "codex-plugins"
     codex_dir = tmp_path / ".codex"
@@ -375,6 +429,7 @@ def test_installer_generates_full_experience_from_upstream_fixture(tmp_path: Pat
         env={
             "MEM0_OSS_MCP_TOKEN_ENV_VAR": "MEM0_EXAMPLE_TOKEN",
             "MEM0_OSS_ENV_FILE": str(env_file),
+            "MEM0_OSS_MCP_TOKEN": "default-token",
             "MEM0_API_KEY": "cloud-token",
         },
     )

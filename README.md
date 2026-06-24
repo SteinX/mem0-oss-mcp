@@ -35,23 +35,25 @@ bearer_token_env_var = "MEM0_OSS_MCP_TOKEN"
 This repository also publishes a Codex plugin marketplace at
 `.agents/plugins/marketplace.json`.
 
-For a bridge running on the same machine as Codex, add the marketplace and
-install the default plugin:
+To use the checked-in plugin, provide the bridge URL and bearer token in the
+Codex process environment, then add the marketplace and install the plugin:
+
+```env
+MEM0_OSS_MCP_URL=http://<bridge-host>:8080/mcp
+MEM0_OSS_MCP_TOKEN=change-me
+```
 
 ```bash
 codex plugin marketplace add SteinX/mem0-oss-mcp
 codex plugin add mem0-oss@mem0-oss-mcp
 ```
 
-The default plugin points at `http://127.0.0.1:8080/mcp` and reads its bearer
-token from `MEM0_OSS_MCP_TOKEN`.
-
-For any other host, port, domain, or token environment variable, generate a
-local plugin instance instead of editing files in this repository. Passing
-`--env-file` is recommended for Codex Desktop: the generated MCP config runs a
-local stdio bridge that reads the token from the dotenv file and forwards
-JSON-RPC to the HTTP MCP endpoint, so the Codex process does not need a custom
-environment variable.
+For Codex Desktop, or for any host, port, domain, or token environment variable
+that should live outside the Codex process environment, generate a local plugin
+instance instead of editing files in this repository. Passing `--env-file` is
+recommended for Codex Desktop: the generated MCP config runs a local stdio
+bridge that reads the token from the dotenv file and forwards JSON-RPC to the
+HTTP MCP endpoint.
 
 ```bash
 python3 plugins/mem0-oss/scripts/install_codex_plugin.py \

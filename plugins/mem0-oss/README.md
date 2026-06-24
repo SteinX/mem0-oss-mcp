@@ -2,19 +2,18 @@
 
 This plugin connects Codex to a self-hosted `mem0-oss-mcp` bridge.
 
-The repository copy defaults to a local bridge:
+The repository copy is environment-driven. It starts the bundled stdio bridge
+and expects the Codex process to provide the bridge URL and bearer token:
 
-```toml
-[mcp_servers.mem0]
-url = "http://127.0.0.1:8080/mcp"
-bearer_token_env_var = "MEM0_OSS_MCP_TOKEN"
+```env
+MEM0_OSS_MCP_URL=http://<bridge-host>:8080/mcp
+MEM0_OSS_MCP_TOKEN=change-me
 ```
 
-For another host or port, generate a local plugin instance. When you pass
-`--env-file`, the generated MCP config uses a local stdio bridge that reads the
-token from that dotenv file and forwards requests to the HTTP MCP endpoint.
-This is the recommended mode for Codex Desktop because it does not require
-custom environment variables in the Codex process:
+For Codex Desktop, generate a local plugin instance instead. When you pass
+`--env-file`, the generated MCP config stores the URL and env-file path in the
+local marketplace copy, then the stdio bridge reads the token from that dotenv
+file. This avoids requiring custom environment variables in the Codex process:
 
 ```bash
 python3 plugins/mem0-oss/scripts/install_codex_plugin.py \

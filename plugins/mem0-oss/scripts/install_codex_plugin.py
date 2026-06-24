@@ -347,9 +347,7 @@ def load_hook_template(
     env_file: Path | None,
 ) -> dict:
     template_path = plugin_root / "hooks" / HOOK_TEMPLATE
-    raw = template_path.read_text(encoding="utf-8")
-    raw = raw.replace("${PLUGIN_ROOT}", shlex.quote(str(plugin_root)))
-    template = json.loads(raw)
+    template = load_json(template_path)
     rewrite_hook_matchers(template, plugin_name, server_name)
 
     scripts_dir = plugin_root / "scripts"
@@ -368,6 +366,7 @@ def load_hook_template(
     for hook in iter_hook_commands(template):
         command = hook.get("command")
         if isinstance(command, str):
+            command = command.replace("${PLUGIN_ROOT}", shlex.quote(str(plugin_root)))
             hook["command"] = f"bash -c {shlex.quote(prelude + '; ' + command)}"
     return template
 

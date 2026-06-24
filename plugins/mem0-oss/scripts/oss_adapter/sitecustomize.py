@@ -74,38 +74,37 @@ def read_dotenv(path: str) -> dict[str, str]:
 
 
 def resolve_token() -> str:
-    primary_names = list(
-        dict.fromkeys(
-            [
-                os.environ.get("MEM0_OSS_MCP_TOKEN_ENV_VAR", ""),
-                "MEM0_OSS_MCP_TOKEN",
-            ]
-        )
-    )
-    for name in primary_names:
-        value = os.environ.get(name, "").strip() if name else ""
-        if value:
-            return value
-
+    token_env_var = os.environ.get("MEM0_OSS_MCP_TOKEN_ENV_VAR", "MEM0_OSS_MCP_TOKEN")
     dotenv = read_dotenv(os.environ.get("MEM0_OSS_ENV_FILE", ""))
-    for name in [
-        *primary_names,
-        "MEM0_API_KEY",
-    ]:
-        value = dotenv.get(name, "").strip() if name else ""
+
+    value = os.environ.get(token_env_var, "").strip()
+    if value:
+        return value
+    value = dotenv.get(token_env_var, "").strip()
+    if value:
+        os.environ.setdefault(token_env_var, value)
+        os.environ.setdefault("MEM0_API_KEY", value)
+        os.environ.setdefault("MEM0_OSS_MCP_TOKEN", value)
+        return value
+
+    if token_env_var != "MEM0_OSS_MCP_TOKEN":
+        value = os.environ.get("MEM0_OSS_MCP_TOKEN", "").strip()
         if value:
-            os.environ.setdefault(name, value)
-            os.environ.setdefault("MEM0_API_KEY", value)
+            return value
+        value = dotenv.get("MEM0_OSS_MCP_TOKEN", "").strip()
+        if value:
             os.environ.setdefault("MEM0_OSS_MCP_TOKEN", value)
+            os.environ.setdefault("MEM0_API_KEY", value)
             return value
 
-    for name in [
-        os.environ.get("MEM0_OSS_MCP_TOKEN_ENV_VAR", ""),
-        "MEM0_API_KEY",
-    ]:
-        value = os.environ.get(name, "").strip() if name else ""
-        if value:
-            return value
+    value = dotenv.get("MEM0_API_KEY", "").strip()
+    if value:
+        os.environ.setdefault("MEM0_API_KEY", value)
+        os.environ.setdefault("MEM0_OSS_MCP_TOKEN", value)
+        return value
+    value = os.environ.get("MEM0_API_KEY", "").strip()
+    if value:
+        return value
     return ""
 
 
@@ -113,6 +112,9 @@ def call_tool(name: str, arguments: dict[str, Any], timeout: float | None = None
     token = resolve_token()
     if not token:
         raise RuntimeError("Mem0 OSS MCP token is not set")
+    url = os.environ.get("MEM0_OSS_MCP_URL", "").strip().rstrip("/")
+    if not url:
+        raise RuntimeError("MEM0_OSS_MCP_URL is not set")
 
     payload = json.dumps(
         {
@@ -123,7 +125,7 @@ def call_tool(name: str, arguments: dict[str, Any], timeout: float | None = None
         }
     ).encode("utf-8")
     request = urllib.request.Request(
-        os.environ.get("MEM0_OSS_MCP_URL", "http://127.0.0.1:8080/mcp").rstrip("/"),
+        url,
         data=payload,
         method="POST",
         headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"},
