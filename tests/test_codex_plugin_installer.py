@@ -182,6 +182,33 @@ def test_installer_uses_stdio_bridge_when_env_file_is_set(tmp_path: Path) -> Non
     assert "bearer_token_env_var" not in server
 
 
+def test_installer_rejects_missing_env_file_before_generating_config(tmp_path: Path) -> None:
+    marketplace_root = tmp_path / "codex-plugins"
+    missing_env = tmp_path / "missing.env"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(INSTALLER),
+            "--url",
+            "https://mem0.example.test:18443/mcp",
+            "--name",
+            "mem0-example",
+            "--marketplace-root",
+            str(marketplace_root),
+            "--env-file",
+            str(missing_env),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "--env-file does not exist" in result.stderr
+    assert not (marketplace_root / "plugins" / "mem0-example" / ".mcp.json").exists()
+
+
 def test_installer_refuses_upstream_source_inside_target(tmp_path: Path) -> None:
     marketplace_root = tmp_path / "codex-plugins"
     upstream_root = make_upstream_fixture(marketplace_root / "plugins" / "mem0-example")

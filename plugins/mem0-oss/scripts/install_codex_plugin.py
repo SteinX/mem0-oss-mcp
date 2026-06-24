@@ -155,6 +155,11 @@ def selected_mcp_transport(requested: str, env_file: Path | None) -> str:
     return requested
 
 
+def validate_env_file(path: Path | None) -> None:
+    if path is not None and not path.is_file():
+        raise ValueError(f"--env-file does not exist: {path}")
+
+
 def write_mcp_config(
     plugin_root: Path,
     server_name: str,
@@ -434,9 +439,6 @@ def install_hooks(
     if platform.system() == "Windows":
         raise RuntimeError("Codex hooks use bash scripts; install them from WSL or another Unix-like shell")
 
-    if env_file is not None and not env_file.is_file():
-        raise ValueError(f"--env-file does not exist: {env_file}")
-
     hooks_file = codex_dir / "hooks.json"
     config = load_hooks(hooks_file)
     rewrite_hook_script_tool_names(plugin_root, plugin_name, server_name)
@@ -511,6 +513,7 @@ def main() -> int:
     target_root = marketplace_root / "plugins" / plugin_name
     codex_dir = args.codex_dir.expanduser().resolve()
     env_file = args.env_file.expanduser().resolve() if args.env_file else None
+    validate_env_file(env_file)
     mcp_transport = selected_mcp_transport(args.mcp_transport, env_file)
 
     upstream_dir = args.upstream_plugin_dir.expanduser().resolve()
