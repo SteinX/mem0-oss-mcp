@@ -81,6 +81,7 @@ def test_stdio_bridge_reads_env_file_and_proxies_json_rpc(tmp_path: Path) -> Non
                 "MEM0_OSS_MCP_URL": f"http://127.0.0.1:{server.server_port}/mcp",
                 "MEM0_OSS_MCP_TOKEN_ENV_VAR": "MEM0_EXAMPLE_TOKEN",
                 "MEM0_OSS_ENV_FILE": str(env_file),
+                "MEM0_API_KEY": "cloud-token",
             }
         )
         result = subprocess.run(

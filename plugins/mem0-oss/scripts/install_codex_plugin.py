@@ -311,6 +311,16 @@ def rewrite_hook_matchers(config: dict, plugin_name: str, server_name: str) -> N
                 entry["matcher"] = rewrite_hook_matcher(matcher, plugin_name, server_name)
 
 
+def rewrite_hook_script_tool_names(plugin_root: Path, plugin_name: str, server_name: str) -> None:
+    script = plugin_root / "scripts" / "enforce_metadata_defaults.sh"
+    if not script.exists():
+        return
+    content = script.read_text(encoding="utf-8")
+    rewritten = rewrite_hook_matcher(content, plugin_name, server_name)
+    if rewritten != content:
+        script.write_text(rewritten, encoding="utf-8")
+
+
 def load_hook_template(
     plugin_root: Path,
     plugin_name: str,
@@ -429,6 +439,7 @@ def install_hooks(
 
     hooks_file = codex_dir / "hooks.json"
     config = load_hooks(hooks_file)
+    rewrite_hook_script_tool_names(plugin_root, plugin_name, server_name)
     template = load_hook_template(plugin_root, plugin_name, server_name, url, token_env_var, env_file)
     config = strip_owned_hooks(config, plugin_name, plugin_root)
     config = merge_hooks(config, template)

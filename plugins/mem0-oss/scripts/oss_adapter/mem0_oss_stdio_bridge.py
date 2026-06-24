@@ -44,17 +44,20 @@ def read_dotenv(path: str) -> dict[str, str]:
 
 def resolve_token() -> str:
     token_env_var = os.environ.get("MEM0_OSS_MCP_TOKEN_ENV_VAR", DEFAULT_TOKEN_ENV_VAR)
-    names = [token_env_var, DEFAULT_TOKEN_ENV_VAR, "MEM0_API_KEY"]
-    for name in names:
+    primary_names = list(dict.fromkeys([token_env_var, DEFAULT_TOKEN_ENV_VAR]))
+    for name in primary_names:
         value = os.environ.get(name, "").strip()
         if value:
             return value
 
     dotenv = read_dotenv(os.environ.get("MEM0_OSS_ENV_FILE", ""))
-    for name in names:
+    for name in [*primary_names, "MEM0_API_KEY"]:
         value = dotenv.get(name, "").strip()
         if value:
             return value
+    value = os.environ.get("MEM0_API_KEY", "").strip()
+    if value:
+        return value
     return ""
 
 

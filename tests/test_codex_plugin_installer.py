@@ -79,6 +79,19 @@ def make_upstream_fixture(root: Path) -> Path:
     scripts = plugin_root / "scripts"
     scripts.mkdir(parents=True, exist_ok=True)
     (scripts / "on_session_start.sh").write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    (scripts / "enforce_metadata_defaults.sh").write_text(
+        "\n".join(
+            [
+                '#!/usr/bin/env bash',
+                'case "$TOOL_NAME" in',
+                '  mcp__mem0__add_memory|mcp__plugin_mem0_mem0__add_memory) HANDLER="add_memory" ;;',
+                '  mcp__mem0__search_memories|mcp__plugin_mem0_mem0__search_memories) HANDLER="search_memories" ;;',
+                "esac",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
     (scripts / "auto_import.py").write_text("print('hosted import')\n", encoding="utf-8")
     (scripts / "auto_setup_categories.py").write_text("print('hosted categories')\n", encoding="utf-8")
     onboard = plugin_root / "skills" / "onboard"
@@ -239,6 +252,28 @@ def test_installer_generates_full_experience_from_upstream_fixture(tmp_path: Pat
     )
     post_tool_matcher = hooks["hooks"]["PostToolUse"][0]["matcher"]
     assert post_tool_matcher == "mcp__mem0_team__.*|mcp__plugin_mem0_example_mem0_team__.*"
+
+    enforce_script = (plugin_root / "scripts" / "enforce_metadata_defaults.sh").read_text()
+    assert "mcp__mem0_team__add_memory" in enforce_script
+    assert "mcp__plugin_mem0_example_mem0_team__add_memory" in enforce_script
+    assert "mcp__plugin_mem0_mem0__" not in enforce_script
+
+    env_result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            f". {plugin_root / 'scripts' / 'mem0_oss_env.sh'}; printf '%s' \"$MEM0_API_KEY\"",
+        ],
+        text=True,
+        capture_output=True,
+        check=True,
+        env={
+            "MEM0_OSS_MCP_TOKEN_ENV_VAR": "MEM0_EXAMPLE_TOKEN",
+            "MEM0_OSS_ENV_FILE": str(env_file),
+            "MEM0_API_KEY": "cloud-token",
+        },
+    )
+    assert env_result.stdout == "test-token"
 
     config = (codex_dir / "config.toml").read_text()
     assert "[features]" in config
