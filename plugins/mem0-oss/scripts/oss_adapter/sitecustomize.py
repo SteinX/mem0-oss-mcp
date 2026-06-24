@@ -193,10 +193,10 @@ def dispatch_platform_call(parsed: urllib.parse.ParseResult, method: str, body: 
             return call_tool("update_memory", args)
         return call_tool("get_memory", args)
 
-    if "/events/" in path:
+    if path.startswith("/v1/event/") or "/events/" in path:
         args.setdefault("event_id", urllib.parse.unquote(path.rsplit("/", 1)[-1]))
         return call_tool("get_event_status", args)
-    if path == "/v3/events":
+    if path in {"/v1/events", "/v3/events"}:
         return call_tool("list_events", args)
 
     raise RuntimeError(f"unsupported Mem0 Platform endpoint in OSS adapter: {parsed.geturl()}")
