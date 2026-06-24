@@ -46,6 +46,15 @@ def test_sitecustomize_imports_and_patches_urllib() -> None:
     assert result.stdout.strip() == "sitecustomize"
 
 
+def test_sitecustomize_reads_quoted_hash_from_env_file(tmp_path: Path) -> None:
+    env_file = tmp_path / "bridge.env"
+    env_file.write_text('MEM0_EXAMPLE_TOKEN="test#token" # local bridge token\n', encoding="utf-8")
+
+    adapter = load_adapter()
+
+    assert adapter.read_dotenv(str(env_file)) == {"MEM0_EXAMPLE_TOKEN": "test#token"}
+
+
 def test_sitecustomize_maps_v1_event_status(monkeypatch) -> None:
     adapter = load_adapter()
     calls = []

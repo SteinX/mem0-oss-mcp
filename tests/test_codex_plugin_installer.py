@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import subprocess
 import sys
@@ -8,6 +9,15 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = REPO_ROOT / "plugins" / "mem0-oss" / "scripts" / "install_codex_plugin.py"
+
+
+def load_installer():
+    spec = importlib.util.spec_from_file_location("mem0_oss_installer_test", INSTALLER)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def write_json(path: Path, data: dict) -> None:
@@ -237,11 +247,51 @@ def test_installer_refuses_upstream_source_inside_target(tmp_path: Path) -> None
     assert manifest.is_file()
 
 
+def test_hook_ownership_matches_exact_plugin_name(tmp_path: Path) -> None:
+    installer = load_installer()
+    plugin_root = tmp_path / "codex-plugins" / "plugins" / "mem0-example"
+
+    prefix_entry = {
+        "hooks": [
+            {
+                "command": (
+                    "bash -c 'export MEM0_OSS_PLUGIN=mem0-example-prod; "
+                    "/tmp/mem0-example-prod/scripts/on_session_start.sh'"
+                )
+            }
+        ]
+    }
+    exact_entry = {
+        "hooks": [
+            {
+                "command": (
+                    "bash -c 'export MEM0_OSS_PLUGIN=mem0-example; "
+                    "/tmp/mem0-example/scripts/on_session_start.sh'"
+                )
+            }
+        ]
+    }
+    quoted_exact_entry = {
+        "hooks": [
+            {
+                "command": (
+                    "bash -c 'export MEM0_OSS_PLUGIN=\"mem0-example\"; "
+                    "/tmp/mem0-example/scripts/on_session_start.sh'"
+                )
+            }
+        ]
+    }
+
+    assert not installer.is_owned_hook_entry(prefix_entry, "mem0-example", plugin_root)
+    assert installer.is_owned_hook_entry(exact_entry, "mem0-example", plugin_root)
+    assert installer.is_owned_hook_entry(quoted_exact_entry, "mem0-example", plugin_root)
+
+
 def test_installer_generates_full_experience_from_upstream_fixture(tmp_path: Path) -> None:
     marketplace_root = tmp_path / "codex-plugins"
     codex_dir = tmp_path / ".codex"
     env_file = tmp_path / "bridge.env"
-    env_file.write_text("MEM0_EXAMPLE_TOKEN=test-token\n", encoding="utf-8")
+    env_file.write_text('MEM0_EXAMPLE_TOKEN="test#token" # local bridge token\n', encoding="utf-8")
     upstream_root = make_upstream_fixture(tmp_path / "mem0-upstream")
 
     cmd = [
@@ -328,7 +378,7 @@ def test_installer_generates_full_experience_from_upstream_fixture(tmp_path: Pat
             "MEM0_API_KEY": "cloud-token",
         },
     )
-    assert env_result.stdout == "test-token"
+    assert env_result.stdout == "test#token"
 
     config = (codex_dir / "config.toml").read_text()
     assert "[features]" in config

@@ -326,6 +326,18 @@ def rewrite_hook_script_tool_names(plugin_root: Path, plugin_name: str, server_n
         script.write_text(rewritten, encoding="utf-8")
 
 
+def has_shell_assignment(command: str, name: str, value: str) -> bool:
+    escaped_name = re.escape(name)
+    escaped_value = re.escape(value)
+    pattern = (
+        rf"(?:^|[\s;])"
+        rf"(?:export\s+)?{escaped_name}="
+        rf"(?:'{escaped_value}'|\"{escaped_value}\"|{escaped_value})"
+        rf"(?=$|[\s;])"
+    )
+    return re.search(pattern, command) is not None
+
+
 def load_hook_template(
     plugin_root: Path,
     plugin_name: str,
@@ -361,15 +373,12 @@ def load_hook_template(
 
 
 def is_owned_hook_entry(entry: dict, plugin_name: str, plugin_root: Path) -> bool:
-    markers = (
-        f"MEM0_OSS_PLUGIN={plugin_name}",
-        f"MEM0_OSS_PLUGIN='{plugin_name}'",
-        f"{plugin_root}/scripts/",
-        f"{shlex.quote(str(plugin_root))}/scripts/",
-    )
+    root_markers = (f"{plugin_root}/scripts/", f"{shlex.quote(str(plugin_root))}/scripts/")
     for hook in entry.get("hooks", []):
         command = hook.get("command", "") if isinstance(hook, dict) else ""
-        if any(marker in command for marker in markers):
+        if has_shell_assignment(command, "MEM0_OSS_PLUGIN", plugin_name):
+            return True
+        if any(marker in command for marker in root_markers):
             return True
     return False
 

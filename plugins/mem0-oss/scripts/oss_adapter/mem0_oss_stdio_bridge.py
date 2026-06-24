@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import sys
 import threading
 import urllib.error
@@ -20,6 +21,14 @@ from typing import Any
 
 
 DEFAULT_TOKEN_ENV_VAR = "MEM0_OSS_MCP_TOKEN"
+
+
+def parse_dotenv_value(value: str) -> str:
+    try:
+        parts = shlex.split(value.strip(), comments=True, posix=True)
+    except ValueError:
+        return ""
+    return parts[0] if parts else ""
 
 
 def read_dotenv(path: str) -> dict[str, str]:
@@ -38,7 +47,7 @@ def read_dotenv(path: str) -> dict[str, str]:
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, value = line.split("=", 1)
-        values[key.strip()] = value.strip().strip("\"'")
+        values[key.strip()] = parse_dotenv_value(value)
     return values
 
 

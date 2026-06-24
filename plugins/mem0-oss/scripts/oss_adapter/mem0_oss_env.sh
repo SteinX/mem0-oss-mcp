@@ -6,12 +6,32 @@ _mem0_oss_read_dotenv_var() {
   _name="$2"
   [ -n "$_file" ] || return 0
   [ -f "$_file" ] || return 0
-  grep -E "^[[:space:]]*${_name}=" "$_file" 2>/dev/null \
-    | tail -1 \
-    | sed 's/^[^=]*=//' \
-    | sed "s/^[\"']//;s/[\"']$//" \
-    | sed 's/#.*//' \
-    | tr -d '[:space:]'
+  python3 - "$_file" "$_name" <<'PY'
+import shlex
+import sys
+
+path, name = sys.argv[1:3]
+value = ""
+try:
+    with open(path, encoding="utf-8", errors="replace") as handle:
+        for raw in handle:
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, raw_value = line.split("=", 1)
+            if key.strip() != name:
+                continue
+            try:
+                parts = shlex.split(raw_value.strip(), comments=True, posix=True)
+            except ValueError:
+                parts = []
+            value = parts[0] if parts else ""
+except OSError:
+    pass
+
+if value:
+    print(value, end="")
+PY
 }
 
 _mem0_oss_token_env="${MEM0_OSS_MCP_TOKEN_ENV_VAR:-MEM0_OSS_MCP_TOKEN}"
