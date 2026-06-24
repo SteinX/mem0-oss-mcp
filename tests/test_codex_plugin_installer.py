@@ -37,6 +37,20 @@ def make_upstream_fixture(root: Path) -> Path:
         plugin_root / "hooks" / "codex-hooks.json",
         {
             "hooks": {
+                "PreToolUse": [
+                    {
+                        "matcher": (
+                            "mcp__mem0__add_memory|mcp__plugin_mem0_mem0__add_memory|"
+                            "mcp__mem0__search_memories|mcp__plugin_mem0_mem0__search_memories"
+                        ),
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": "MEM0_PLATFORM=codex ${PLUGIN_ROOT}/scripts/enforce_metadata_defaults.sh",
+                            }
+                        ],
+                    }
+                ],
                 "SessionStart": [
                     {
                         "matcher": "startup|resume|compact",
@@ -47,7 +61,18 @@ def make_upstream_fixture(root: Path) -> Path:
                             }
                         ],
                     }
-                ]
+                ],
+                "PostToolUse": [
+                    {
+                        "matcher": "mcp__mem0__.*|mcp__plugin_mem0_mem0__.*",
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": "MEM0_PLATFORM=codex ${PLUGIN_ROOT}/scripts/on_post_tool_use.sh",
+                            }
+                        ],
+                    }
+                ],
             }
         },
     )
@@ -160,6 +185,8 @@ def test_installer_generates_full_experience_from_upstream_fixture(tmp_path: Pat
         "mem0-example",
         "--token-env-var",
         "MEM0_EXAMPLE_TOKEN",
+        "--server-name",
+        "mem0-team",
         "--marketplace-root",
         str(marketplace_root),
         "--with-hooks",
@@ -187,7 +214,7 @@ def test_installer_generates_full_experience_from_upstream_fixture(tmp_path: Pat
     assert "hooks" not in manifest
 
     mcp = json.loads((plugin_root / ".codex-mcp.json").read_text())
-    server = mcp["mcpServers"]["mem0"]
+    server = mcp["mcpServers"]["mem0-team"]
     assert server["command"] == "python3"
     assert server["env"]["MEM0_OSS_MCP_URL"] == "https://mem0.example.test:18443/mcp"
     assert server["env"]["MEM0_OSS_MCP_TOKEN_ENV_VAR"] == "MEM0_EXAMPLE_TOKEN"
@@ -204,6 +231,14 @@ def test_installer_generates_full_experience_from_upstream_fixture(tmp_path: Pat
     assert "MEM0_OSS_MCP_TOKEN_ENV_VAR=MEM0_EXAMPLE_TOKEN" in command
     assert f"MEM0_OSS_ENV_FILE={env_file}" in command
     assert "mem0_oss_env.sh" in command
+
+    pre_tool_matcher = hooks["hooks"]["PreToolUse"][0]["matcher"]
+    assert pre_tool_matcher == (
+        "mcp__mem0_team__add_memory|mcp__plugin_mem0_example_mem0_team__add_memory|"
+        "mcp__mem0_team__search_memories|mcp__plugin_mem0_example_mem0_team__search_memories"
+    )
+    post_tool_matcher = hooks["hooks"]["PostToolUse"][0]["matcher"]
+    assert post_tool_matcher == "mcp__mem0_team__.*|mcp__plugin_mem0_example_mem0_team__.*"
 
     config = (codex_dir / "config.toml").read_text()
     assert "[features]" in config

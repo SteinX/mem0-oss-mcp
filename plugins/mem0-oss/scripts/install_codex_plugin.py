@@ -286,9 +286,35 @@ def command_env(name: str, value: str) -> str:
     return f"{name}={shlex.quote(value)}"
 
 
+def codex_tool_segment(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", value.lower()).strip("_")
+
+
+def rewrite_hook_matcher(matcher: str, plugin_name: str, server_name: str) -> str:
+    plugin_segment = codex_tool_segment(plugin_name)
+    server_segment = codex_tool_segment(server_name)
+    return (
+        matcher.replace("mcp__plugin_mem0_mem0__", f"mcp__plugin_{plugin_segment}_{server_segment}__")
+        .replace("mcp__mem0__", f"mcp__{server_segment}__")
+    )
+
+
+def rewrite_hook_matchers(config: dict, plugin_name: str, server_name: str) -> None:
+    for entries in (config.get("hooks") or {}).values():
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            matcher = entry.get("matcher")
+            if isinstance(matcher, str):
+                entry["matcher"] = rewrite_hook_matcher(matcher, plugin_name, server_name)
+
+
 def load_hook_template(
     plugin_root: Path,
     plugin_name: str,
+    server_name: str,
     url: str,
     token_env_var: str,
     env_file: Path | None,
@@ -297,6 +323,7 @@ def load_hook_template(
     raw = template_path.read_text(encoding="utf-8")
     raw = raw.replace("${PLUGIN_ROOT}", shlex.quote(str(plugin_root)))
     template = json.loads(raw)
+    rewrite_hook_matchers(template, plugin_name, server_name)
 
     scripts_dir = plugin_root / "scripts"
     prelude_parts = [
@@ -387,6 +414,7 @@ def enable_codex_hooks_feature(config_file: Path) -> None:
 def install_hooks(
     plugin_root: Path,
     plugin_name: str,
+    server_name: str,
     url: str,
     token_env_var: str,
     codex_dir: Path,
@@ -401,7 +429,7 @@ def install_hooks(
 
     hooks_file = codex_dir / "hooks.json"
     config = load_hooks(hooks_file)
-    template = load_hook_template(plugin_root, plugin_name, url, token_env_var, env_file)
+    template = load_hook_template(plugin_root, plugin_name, server_name, url, token_env_var, env_file)
     config = strip_owned_hooks(config, plugin_name, plugin_root)
     config = merge_hooks(config, template)
     write_json(hooks_file, config)
@@ -500,6 +528,7 @@ def main() -> int:
         hooks_path = install_hooks(
             target_root,
             plugin_name,
+            server_name,
             url,
             token_env_var,
             codex_dir,
