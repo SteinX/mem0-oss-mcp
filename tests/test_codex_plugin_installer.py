@@ -182,6 +182,34 @@ def test_installer_uses_stdio_bridge_when_env_file_is_set(tmp_path: Path) -> Non
     assert "bearer_token_env_var" not in server
 
 
+def test_installer_refuses_upstream_source_inside_target(tmp_path: Path) -> None:
+    marketplace_root = tmp_path / "codex-plugins"
+    upstream_root = make_upstream_fixture(marketplace_root / "plugins" / "mem0-example")
+    manifest = upstream_root / "integrations" / "mem0-plugin" / ".codex-plugin" / "plugin.json"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(INSTALLER),
+            "--url",
+            "https://mem0.example.test:18443/mcp",
+            "--name",
+            "mem0-example",
+            "--marketplace-root",
+            str(marketplace_root),
+            "--with-hooks",
+            "--upstream-plugin-dir",
+            str(upstream_root),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert manifest.is_file()
+
+
 def test_installer_generates_full_experience_from_upstream_fixture(tmp_path: Path) -> None:
     marketplace_root = tmp_path / "codex-plugins"
     codex_dir = tmp_path / ".codex"

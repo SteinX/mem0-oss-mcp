@@ -81,7 +81,7 @@ def validate_upstream_plugin_dir(path: Path) -> Path:
 def copy_plugin(source: Path, target: Path) -> None:
     source = source.resolve()
     target = target.resolve()
-    if source == target or source in target.parents:
+    if source == target or source in target.parents or target in source.parents:
         raise ValueError("marketplace root must not be inside the source plugin directory")
     if target.exists():
         shutil.rmtree(target)
