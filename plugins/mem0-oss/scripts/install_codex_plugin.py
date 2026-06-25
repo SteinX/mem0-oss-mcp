@@ -172,25 +172,21 @@ def write_mcp_config(
     if transport == "stdio":
         bridge = plugin_root / "scripts" / "mem0_oss_stdio_bridge.py"
         config = {
-            "mcpServers": {
-                server_name: {
-                    "command": "python3",
-                    "args": [str(bridge)],
-                    "env": {
-                        "MEM0_OSS_MCP_URL": url,
-                        "MEM0_OSS_MCP_TOKEN_ENV_VAR": token_env_var,
-                        "MEM0_OSS_ENV_FILE": str(env_file),
-                    },
-                }
+            server_name: {
+                "command": "python3",
+                "args": [str(bridge)],
+                "env": {
+                    "MEM0_OSS_MCP_URL": url,
+                    "MEM0_OSS_MCP_TOKEN_ENV_VAR": token_env_var,
+                    "MEM0_OSS_ENV_FILE": str(env_file),
+                },
             }
         }
     else:
         config = {
-            "mcpServers": {
-                server_name: {
-                    "url": url,
-                    "bearer_token_env_var": token_env_var,
-                }
+            server_name: {
+                "url": url,
+                "bearer_token_env_var": token_env_var,
             }
         }
     write_json(plugin_root / ".mcp.json", config)
