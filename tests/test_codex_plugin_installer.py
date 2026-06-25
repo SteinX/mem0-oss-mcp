@@ -116,9 +116,8 @@ def test_repository_plugin_mcp_config_is_env_driven() -> None:
     raw = mcp_path.read_text(encoding="utf-8")
     mcp = json.loads(raw)
 
-    assert "mcpServers" not in mcp
     assert "mcp_servers" not in mcp
-    server = mcp["mem0"]
+    server = mcp["mcpServers"]["mem0"]
     assert "127.0.0.1" not in raw
     assert "8080" not in raw
     assert "url" not in server
@@ -163,9 +162,8 @@ def test_installer_generates_local_marketplace(tmp_path: Path) -> None:
     assert manifest["version"].startswith("0.1.0+codex.")
 
     mcp = json.loads((plugin_root / ".mcp.json").read_text())
-    assert "mcpServers" not in mcp
     assert "mcp_servers" not in mcp
-    server = mcp["mem0"]
+    server = mcp["mcpServers"]["mem0"]
     assert server["url"] == "https://mem0.example.test:18443/mcp"
     assert server["bearer_token_env_var"] == "MEM0_EXAMPLE_TOKEN"
 
@@ -199,9 +197,8 @@ def test_installer_uses_stdio_bridge_when_env_file_is_set(tmp_path: Path) -> Non
     assert (plugin_root / "scripts" / "mem0_oss_stdio_bridge.py").is_file()
 
     mcp = json.loads((plugin_root / ".mcp.json").read_text())
-    assert "mcpServers" not in mcp
     assert "mcp_servers" not in mcp
-    server = mcp["mem0"]
+    server = mcp["mcpServers"]["mem0"]
     assert server["command"] == "python3"
     assert server["args"] == [str(plugin_root / "scripts" / "mem0_oss_stdio_bridge.py")]
     assert server["env"] == {
@@ -392,9 +389,8 @@ def test_installer_generates_full_experience_from_upstream_fixture(tmp_path: Pat
     assert "hooks" not in manifest
 
     mcp = json.loads((plugin_root / ".codex-mcp.json").read_text())
-    assert "mcpServers" not in mcp
     assert "mcp_servers" not in mcp
-    server = mcp["mem0-team"]
+    server = mcp["mcpServers"]["mem0-team"]
     assert server["command"] == "python3"
     assert server["env"]["MEM0_OSS_MCP_URL"] == "https://mem0.example.test:18443/mcp"
     assert server["env"]["MEM0_OSS_MCP_TOKEN_ENV_VAR"] == "MEM0_EXAMPLE_TOKEN"
