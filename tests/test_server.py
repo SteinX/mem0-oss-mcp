@@ -19,8 +19,149 @@ class MappingTests(unittest.TestCase):
         }
         self.assertEqual(
             server.normalize_filters(filters),
-            {"AND": [{"user_id": "u1"}, {"app_id": "repo"}, {"type": "decision"}]},
+            {"user_id": "u1", "app_id": "repo", "type": "decision"},
         )
+
+    def test_normalize_filters_preserves_complex_filters(self):
+        filters = {"AND": [{"user_id": "u1"}, {"OR": [{"app_id": "repo"}, {"app_id": "other"}]}]}
+        self.assertEqual(
+            server.normalize_filters(filters),
+            {"AND": [{"user_id": "u1"}, {"OR": [{"app_id": "repo"}, {"app_id": "other"}]}]},
+        )
+
+    def test_normalize_filters_collapses_single_or(self):
+        self.assertEqual(server.normalize_filters({"OR": [{"user_id": "*"}]}), {"user_id": "*"})
+
+    def test_search_memories_flattens_platform_filters_for_backend(self):
+        captured = {}
+        original_backend = server._backend
+
+        def fake_backend(method, path, body=None, query=None):
+            captured.update({"method": method, "path": path, "body": body, "query": query})
+            return {"results": []}
+
+        server._backend = fake_backend
+        try:
+            server.search_memories(
+                {
+                    "query": "q",
+                    "filters": {
+                        "AND": [
+                            {"user_id": "u1"},
+                            {"app_id": "repo"},
+                            {"metadata": {"type": "decision"}},
+                        ]
+                    },
+                    "top_k": 1,
+                }
+            )
+        finally:
+            server._backend = original_backend
+
+        self.assertEqual(captured["method"], "POST")
+        self.assertEqual(captured["path"], "/search")
+        self.assertEqual(captured["body"]["filters"], {"user_id": "u1", "app_id": "repo", "type": "decision"})
+
+    def test_add_memory_preserves_expiration_date(self):
+        captured = {}
+        original_backend = server._backend
+
+        def fake_backend(method, path, body=None, query=None):
+            captured.update({"method": method, "path": path, "body": body, "query": query})
+            return {"id": "mem-1"}
+
+        server._backend = fake_backend
+        try:
+            server.add_memory(
+                {
+                    "text": "temporary session state",
+                    "user_id": "u1",
+                    "metadata": {"type": "session_state"},
+                    "expiration_date": "2999-01-01",
+                }
+            )
+        finally:
+            server._backend = original_backend
+
+        self.assertEqual(captured["method"], "POST")
+        self.assertEqual(captured["path"], "/memories")
+        self.assertEqual(captured["body"]["expiration_date"], "2999-01-01")
+        self.assertEqual(captured["body"]["metadata"]["expiration_date"], "2999-01-01")
+
+    def test_search_memories_filters_expired_results(self):
+        original_backend = server._backend
+
+        def fake_backend(method, path, body=None, query=None):
+            return {
+                "results": [
+                    {"id": "old", "metadata": {"expiration_date": "2000-01-01"}},
+                    {"id": "fresh", "metadata": {"expiration_date": "2999-01-01"}},
+                    {"id": "permanent", "metadata": {}},
+                ],
+                "count": 3,
+            }
+
+        server._backend = fake_backend
+        try:
+            result = server.search_memories({"query": "session"})
+        finally:
+            server._backend = original_backend
+
+        self.assertEqual([memory["id"] for memory in result["results"]], ["fresh", "permanent"])
+        self.assertEqual(result["count"], 2)
+
+    def test_search_memories_overfetches_before_expiration_filtering(self):
+        captured = {}
+        original_backend = server._backend
+
+        def fake_backend(method, path, body=None, query=None):
+            captured.update({"method": method, "path": path, "body": body, "query": query})
+            return {
+                "results": [
+                    {"id": "old-1", "metadata": {"expiration_date": "2000-01-01"}},
+                    {"id": "old-2", "metadata": {"expiration_date": "2000-01-01"}},
+                    {"id": "fresh-1", "metadata": {"expiration_date": "2999-01-01"}},
+                    {"id": "fresh-2", "metadata": {"expiration_date": "2999-01-01"}},
+                    {"id": "fresh-3", "metadata": {"expiration_date": "2999-01-01"}},
+                ],
+                "count": 5,
+            }
+
+        server._backend = fake_backend
+        try:
+            result = server.search_memories({"query": "session", "top_k": 2})
+        finally:
+            server._backend = original_backend
+
+        self.assertGreater(captured["body"]["top_k"], 2)
+        self.assertEqual([memory["id"] for memory in result["results"]], ["fresh-1", "fresh-2"])
+        self.assertEqual(result["count"], 2)
+
+    def test_app_scoped_delete_includes_expired_memories(self):
+        deleted = []
+        original_backend = server._backend
+
+        def fake_backend(method, path, body=None, query=None):
+            if method == "GET" and path == "/memories":
+                return {
+                    "results": [
+                        {"id": "old", "user_id": "u1", "metadata": {"app_id": "repo", "expiration_date": "2000-01-01"}},
+                        {"id": "fresh", "user_id": "u1", "metadata": {"app_id": "repo"}},
+                    ]
+                }
+            if method == "DELETE" and path.startswith("/memories/"):
+                deleted.append(path.rsplit("/", 1)[-1])
+                return {"ok": True}
+            raise AssertionError((method, path, body, query))
+
+        server._backend = fake_backend
+        try:
+            result = server.delete_all_memories({"user_id": "u1", "app_id": "repo"})
+        finally:
+            server._backend = original_backend
+
+        self.assertEqual(deleted, ["old", "fresh"])
+        self.assertEqual(result["deleted_ids"], ["old", "fresh"])
 
     def test_get_memories_filter_values_match_app_id_from_metadata(self):
         memory = {"id": "1", "metadata": {"app_id": "repo", "type": "decision"}}
@@ -45,6 +186,12 @@ class MappingTests(unittest.TestCase):
                 "get_event_status",
             },
         )
+
+    def test_add_memory_schema_exposes_expiration_date(self):
+        add_memory = next(tool for tool in server.tool_schema() if tool["name"] == "add_memory")
+        properties = add_memory["inputSchema"]["properties"]
+
+        self.assertEqual(properties["expiration_date"]["type"], "string")
 
     def test_initialize_rpc(self):
         response = server.handle_rpc({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})

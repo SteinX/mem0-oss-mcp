@@ -1,0 +1,4 @@
+[submodule "third_party/mem0"]
+	path = third_party/mem0
+	url = https://github.com/mem0ai/mem0.git
+	shallow = true

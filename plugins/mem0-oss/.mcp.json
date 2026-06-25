@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "mem0": {
+      "command": "python3",
+      "args": [
+        "scripts/oss_adapter/mem0_oss_stdio_bridge.py"
+      ]
+    }
+  }
+}

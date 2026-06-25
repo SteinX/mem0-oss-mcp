@@ -5,6 +5,7 @@ import os
 import sys
 import time
 import uuid
+from datetime import date, datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -106,11 +107,23 @@ def _filter_values(filters: Any) -> JSON:
 
 
 def normalize_filters(filters: Any) -> Any:
-    """Flatten platform-style metadata filters to OSS payload filters."""
+    """Flatten platform-style filters to OSS payload filters where possible."""
     if isinstance(filters, list):
         return [normalize_filters(item) for item in filters]
     if not isinstance(filters, dict):
         return filters
+
+    keys = set(filters)
+    if keys == {"AND"} and isinstance(filters.get("AND"), list):
+        normalized_items = [normalize_filters(item) for item in filters["AND"]]
+        merged = _merge_flat_filters(normalized_items)
+        return merged if merged is not None else {"AND": normalized_items}
+
+    if keys == {"OR"} and isinstance(filters.get("OR"), list) and len(filters["OR"]) == 1:
+        normalized_item = normalize_filters(filters["OR"][0])
+        if isinstance(normalized_item, dict):
+            return normalized_item
+        return {"OR": [normalized_item]}
 
     out: JSON = {}
     for key, value in filters.items():
@@ -118,14 +131,98 @@ def normalize_filters(filters: Any) -> Any:
             out[key] = normalize_filters(value)
         elif key == "metadata" and isinstance(value, dict):
             out.update(value)
+        elif isinstance(value, dict) and set(value) == {"eq"}:
+            out[key] = value["eq"]
         else:
             out[key] = normalize_filters(value)
     return out
 
 
-def _memory_app_id(memory: JSON) -> Any:
+def _merge_flat_filters(items: list[Any]) -> JSON | None:
+    merged: JSON = {}
+    for item in items:
+        if not isinstance(item, dict) or any(key in item for key in ("AND", "OR", "NOT")):
+            return None
+        for key, value in item.items():
+            if key in merged and merged[key] != value:
+                return None
+            merged[key] = value
+    return merged
+
+
+def _memory_metadata(memory: JSON) -> JSON:
     metadata = memory.get("metadata") or memory.get("metadata_") or {}
+    return metadata if isinstance(metadata, dict) else {}
+
+
+def _memory_app_id(memory: JSON) -> Any:
+    metadata = _memory_metadata(memory)
     return metadata.get("app_id") or memory.get("app_id")
+
+
+def _expiration_value(memory: JSON) -> Any:
+    if not isinstance(memory, dict):
+        return None
+    return _memory_metadata(memory).get("expiration_date") or memory.get("expiration_date")
+
+
+def _is_expired(memory: JSON) -> bool:
+    value = _expiration_value(memory)
+    if not value:
+        return False
+    if isinstance(value, datetime):
+        expires_at = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        return expires_at <= datetime.now(timezone.utc)
+    if isinstance(value, date):
+        return value < date.today()
+    if not isinstance(value, str):
+        return False
+    raw = value.strip()
+    if not raw:
+        return False
+    try:
+        if len(raw) <= 10:
+            return date.fromisoformat(raw[:10]) < date.today()
+        expires_at = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    return expires_at <= datetime.now(timezone.utc)
+
+
+def _without_expired(result: Any) -> Any:
+    if isinstance(result, list):
+        return [memory for memory in result if not _is_expired(memory)]
+    if isinstance(result, dict) and isinstance(result.get("results"), list):
+        filtered = [memory for memory in result["results"] if not _is_expired(memory)]
+        out = dict(result)
+        out["results"] = filtered
+        if "count" in out:
+            out["count"] = len(filtered)
+        return out
+    return result
+
+
+def _search_fetch_limit(requested: int) -> int:
+    if requested <= 0:
+        return requested
+    return max(requested * 3, requested + 10)
+
+
+def _limit_result_count(result: Any, limit: int | None) -> Any:
+    if limit is None:
+        return result
+    if isinstance(result, list):
+        return result[:limit]
+    if isinstance(result, dict) and isinstance(result.get("results"), list):
+        trimmed = result["results"][:limit]
+        out = dict(result)
+        out["results"] = trimmed
+        if "count" in out:
+            out["count"] = len(trimmed)
+        return out
+    return result
 
 
 def _matches(memory: JSON, values: JSON) -> bool:
@@ -133,7 +230,7 @@ def _matches(memory: JSON, values: JSON) -> bool:
         if key == "app_id":
             actual = _memory_app_id(memory)
         elif key == "type":
-            actual = (memory.get("metadata") or memory.get("metadata_") or {}).get("type")
+            actual = _memory_metadata(memory).get("type")
         else:
             actual = memory.get(key)
         if isinstance(expected, dict) and "in" in expected:
@@ -162,12 +259,17 @@ def add_memory(args: JSON) -> JSON:
     metadata = dict(args.get("metadata") or {})
     app_id = args.get("app_id") or metadata.get("app_id") or Config.default_app_id
     metadata.setdefault("app_id", app_id)
+    expiration_date = args.get("expiration_date")
+    if expiration_date is not None:
+        metadata.setdefault("expiration_date", expiration_date)
 
     body: JSON = {
         "messages": messages,
         "metadata": metadata,
         "user_id": args.get("user_id") or Config.default_user_id,
     }
+    if expiration_date is not None:
+        body["expiration_date"] = expiration_date
     for key in ("agent_id", "run_id", "infer", "memory_type", "prompt"):
         if key in args and args[key] is not None:
             body[key] = args[key]
@@ -203,9 +305,11 @@ def search_memories(args: JSON) -> Any:
         raise ValueError("search_memories requires query")
 
     body: JSON = {"query": query, "filters": normalize_filters(args.get("filters") or {})}
+    requested_top_k: int | None = None
     top_k = _first(args, "top_k", "topK", "limit")
     if top_k is not None:
-        body["top_k"] = int(top_k)
+        requested_top_k = int(top_k)
+        body["top_k"] = _search_fetch_limit(requested_top_k)
     for key in ("threshold", "explain"):
         if key in args and args[key] is not None:
             body[key] = args[key]
@@ -214,10 +318,12 @@ def search_memories(args: JSON) -> Any:
         if args.get(key) is not None:
             body["filters"].setdefault(key, args[key])
 
-    return _backend("POST", "/search", body)
+    result = _without_expired(_backend("POST", "/search", body))
+    return _limit_result_count(result, requested_top_k)
 
 
 def get_memories(args: JSON) -> JSON:
+    include_expired = bool(args.get("include_expired"))
     filters = args.get("filters") or {}
     values = _filter_values(filters)
     for key in ("user_id", "agent_id", "run_id", "app_id"):
@@ -229,7 +335,7 @@ def get_memories(args: JSON) -> JSON:
     items = result.get("results", result if isinstance(result, list) else [])
     if not isinstance(items, list):
         items = []
-    filtered = [m for m in items if _matches(m, values)]
+    filtered = [m for m in items if (include_expired or not _is_expired(m)) and _matches(m, values)]
     return _paged(filtered, args)
 
 
@@ -259,7 +365,9 @@ def delete_all_memories(args: JSON) -> Any:
     app_id = args.get("app_id")
     if app_id:
         user_id = args.get("user_id") or Config.default_user_id
-        memories = get_memories({"user_id": user_id, "app_id": app_id, "page_size": 1000})["results"]
+        memories = get_memories({"user_id": user_id, "app_id": app_id, "page_size": 1000, "include_expired": True})[
+            "results"
+        ]
         deleted = []
         for memory in memories:
             if memory.get("id"):
@@ -330,7 +438,7 @@ def tool_schema() -> list[JSON]:
         "metadata": {"type": "object"},
     }
     return [
-        {"name": "add_memory", "description": "Save text or conversation history.", "inputSchema": schema({"text": {"type": "string"}, "messages": {"type": "array"}, "infer": {"type": "boolean"}, **common})},
+        {"name": "add_memory", "description": "Save text or conversation history.", "inputSchema": schema({"text": {"type": "string"}, "messages": {"type": "array"}, "infer": {"type": "boolean"}, "expiration_date": {"type": "string"}, **common})},
         {"name": "search_memories", "description": "Semantic search across memories.", "inputSchema": schema({"query": {"type": "string"}, "top_k": {"type": "integer"}, "threshold": {"type": "number"}, **common}, ["query"])},
         {"name": "get_memories", "description": "List memories with filters and pagination.", "inputSchema": schema({"page": {"type": "integer"}, "page_size": {"type": "integer"}, **common})},
         {"name": "get_memory", "description": "Retrieve one memory by ID.", "inputSchema": schema({"id": {"type": "string"}}, ["id"])},

@@ -1,0 +1,39 @@
+{
+  "name": "mem0-oss",
+  "version": "0.1.0",
+  "description": "Connect Codex to any self-hosted Mem0 OSS MCP bridge.",
+  "author": {
+    "name": "SteinX",
+    "url": "https://github.com/SteinX"
+  },
+  "homepage": "https://github.com/SteinX/mem0-oss-mcp",
+  "repository": "https://github.com/SteinX/mem0-oss-mcp",
+  "license": "MIT",
+  "keywords": [
+    "mem0",
+    "memory",
+    "mcp",
+    "codex",
+    "self-hosted"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Mem0 OSS",
+    "shortDescription": "Use a self-hosted Mem0 OSS MCP bridge from Codex.",
+    "longDescription": "Mem0 OSS connects Codex to a self-hosted Mem0 MCP bridge. Use the bundled installer to target any bridge URL without editing upstream files.",
+    "developerName": "SteinX",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/SteinX/mem0-oss-mcp",
+    "defaultPrompt": [
+      "Search my Mem0 OSS memories for recent decisions",
+      "Remember this project preference in Mem0 OSS",
+      "List recent Mem0 OSS memories for this project"
+    ],
+    "brandColor": "#10B981"
+  }
+}
