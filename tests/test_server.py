@@ -187,6 +187,12 @@ class MappingTests(unittest.TestCase):
             },
         )
 
+    def test_add_memory_schema_exposes_expiration_date(self):
+        add_memory = next(tool for tool in server.tool_schema() if tool["name"] == "add_memory")
+        properties = add_memory["inputSchema"]["properties"]
+
+        self.assertEqual(properties["expiration_date"]["type"], "string")
+
     def test_initialize_rpc(self):
         response = server.handle_rpc({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
         self.assertEqual(response["result"]["serverInfo"]["name"], "mem0-oss-mcp")

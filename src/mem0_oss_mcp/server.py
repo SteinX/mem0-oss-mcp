@@ -438,7 +438,7 @@ def tool_schema() -> list[JSON]:
         "metadata": {"type": "object"},
     }
     return [
-        {"name": "add_memory", "description": "Save text or conversation history.", "inputSchema": schema({"text": {"type": "string"}, "messages": {"type": "array"}, "infer": {"type": "boolean"}, **common})},
+        {"name": "add_memory", "description": "Save text or conversation history.", "inputSchema": schema({"text": {"type": "string"}, "messages": {"type": "array"}, "infer": {"type": "boolean"}, "expiration_date": {"type": "string"}, **common})},
         {"name": "search_memories", "description": "Semantic search across memories.", "inputSchema": schema({"query": {"type": "string"}, "top_k": {"type": "integer"}, "threshold": {"type": "number"}, **common}, ["query"])},
         {"name": "get_memories", "description": "List memories with filters and pagination.", "inputSchema": schema({"page": {"type": "integer"}, "page_size": {"type": "integer"}, **common})},
         {"name": "get_memory", "description": "Retrieve one memory by ID.", "inputSchema": schema({"id": {"type": "string"}}, ["id"])},
