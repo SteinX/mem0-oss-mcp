@@ -348,7 +348,7 @@ def test_installer_generates_full_experience_from_upstream_fixture(tmp_path: Pat
     marketplace_root = tmp_path / "codex-plugins"
     codex_dir = tmp_path / ".codex"
     env_file = tmp_path / "bridge.env"
-    env_file.write_text('MEM0_EXAMPLE_TOKEN="test#token" # local bridge token\n', encoding="utf-8")
+    env_file.write_text("MEM0_EXAMPLE_TOKEN=test#token # local bridge token\n", encoding="utf-8")
     upstream_root = make_upstream_fixture(tmp_path / "mem0-upstream")
 
     cmd = [

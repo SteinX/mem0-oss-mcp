@@ -25,7 +25,7 @@ DEFAULT_TOKEN_ENV_VAR = "MEM0_OSS_MCP_TOKEN"
 
 def parse_dotenv_value(value: str) -> str:
     try:
-        parts = shlex.split(value.strip(), comments=True, posix=True)
+        parts = shlex.split(value.strip(), comments=False, posix=True)
     except ValueError:
         return ""
     return parts[0] if parts else ""

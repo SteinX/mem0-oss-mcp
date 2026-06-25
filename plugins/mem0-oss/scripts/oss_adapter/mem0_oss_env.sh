@@ -22,7 +22,7 @@ try:
             if key.strip() != name:
                 continue
             try:
-                parts = shlex.split(raw_value.strip(), comments=True, posix=True)
+                parts = shlex.split(raw_value.strip(), comments=False, posix=True)
             except ValueError:
                 parts = []
             value = parts[0] if parts else ""

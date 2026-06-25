@@ -49,9 +49,9 @@ def test_sitecustomize_imports_and_patches_urllib() -> None:
     assert result.stdout.strip() == "sitecustomize"
 
 
-def test_sitecustomize_reads_quoted_hash_from_env_file(tmp_path: Path) -> None:
+def test_sitecustomize_reads_unquoted_hash_from_env_file(tmp_path: Path) -> None:
     env_file = tmp_path / "bridge.env"
-    env_file.write_text('MEM0_EXAMPLE_TOKEN="test#token" # local bridge token\n', encoding="utf-8")
+    env_file.write_text("MEM0_EXAMPLE_TOKEN=test#token # local bridge token\n", encoding="utf-8")
 
     adapter = load_adapter()
 

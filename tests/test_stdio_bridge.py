@@ -68,7 +68,7 @@ class ConcurrentProxyHandler(BaseHTTPRequestHandler):
 
 def test_stdio_bridge_reads_env_file_and_proxies_json_rpc(tmp_path: Path) -> None:
     env_file = tmp_path / "bridge.env"
-    env_file.write_text('MEM0_EXAMPLE_TOKEN="test#token" # local bridge token\n', encoding="utf-8")
+    env_file.write_text("MEM0_EXAMPLE_TOKEN=test#token # local bridge token\n", encoding="utf-8")
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), ProxyHandler)
     thread = threading.Thread(target=server.serve_forever)
