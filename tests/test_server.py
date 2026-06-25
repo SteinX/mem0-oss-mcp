@@ -110,6 +110,32 @@ class MappingTests(unittest.TestCase):
         self.assertEqual([memory["id"] for memory in result["results"]], ["fresh", "permanent"])
         self.assertEqual(result["count"], 2)
 
+    def test_app_scoped_delete_includes_expired_memories(self):
+        deleted = []
+        original_backend = server._backend
+
+        def fake_backend(method, path, body=None, query=None):
+            if method == "GET" and path == "/memories":
+                return {
+                    "results": [
+                        {"id": "old", "user_id": "u1", "metadata": {"app_id": "repo", "expiration_date": "2000-01-01"}},
+                        {"id": "fresh", "user_id": "u1", "metadata": {"app_id": "repo"}},
+                    ]
+                }
+            if method == "DELETE" and path.startswith("/memories/"):
+                deleted.append(path.rsplit("/", 1)[-1])
+                return {"ok": True}
+            raise AssertionError((method, path, body, query))
+
+        server._backend = fake_backend
+        try:
+            result = server.delete_all_memories({"user_id": "u1", "app_id": "repo"})
+        finally:
+            server._backend = original_backend
+
+        self.assertEqual(deleted, ["old", "fresh"])
+        self.assertEqual(result["deleted_ids"], ["old", "fresh"])
+
     def test_get_memories_filter_values_match_app_id_from_metadata(self):
         memory = {"id": "1", "metadata": {"app_id": "repo", "type": "decision"}}
         self.assertTrue(server._matches(memory, {"app_id": "repo", "type": "decision"}))

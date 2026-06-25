@@ -299,6 +299,7 @@ def search_memories(args: JSON) -> Any:
 
 
 def get_memories(args: JSON) -> JSON:
+    include_expired = bool(args.get("include_expired"))
     filters = args.get("filters") or {}
     values = _filter_values(filters)
     for key in ("user_id", "agent_id", "run_id", "app_id"):
@@ -310,7 +311,7 @@ def get_memories(args: JSON) -> JSON:
     items = result.get("results", result if isinstance(result, list) else [])
     if not isinstance(items, list):
         items = []
-    filtered = [m for m in items if not _is_expired(m) and _matches(m, values)]
+    filtered = [m for m in items if (include_expired or not _is_expired(m)) and _matches(m, values)]
     return _paged(filtered, args)
 
 
@@ -340,7 +341,9 @@ def delete_all_memories(args: JSON) -> Any:
     app_id = args.get("app_id")
     if app_id:
         user_id = args.get("user_id") or Config.default_user_id
-        memories = get_memories({"user_id": user_id, "app_id": app_id, "page_size": 1000})["results"]
+        memories = get_memories({"user_id": user_id, "app_id": app_id, "page_size": 1000, "include_expired": True})[
+            "results"
+        ]
         deleted = []
         for memory in memories:
             if memory.get("id"):
