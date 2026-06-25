@@ -62,6 +62,54 @@ class MappingTests(unittest.TestCase):
         self.assertEqual(captured["path"], "/search")
         self.assertEqual(captured["body"]["filters"], {"user_id": "u1", "app_id": "repo", "type": "decision"})
 
+    def test_add_memory_preserves_expiration_date(self):
+        captured = {}
+        original_backend = server._backend
+
+        def fake_backend(method, path, body=None, query=None):
+            captured.update({"method": method, "path": path, "body": body, "query": query})
+            return {"id": "mem-1"}
+
+        server._backend = fake_backend
+        try:
+            server.add_memory(
+                {
+                    "text": "temporary session state",
+                    "user_id": "u1",
+                    "metadata": {"type": "session_state"},
+                    "expiration_date": "2999-01-01",
+                }
+            )
+        finally:
+            server._backend = original_backend
+
+        self.assertEqual(captured["method"], "POST")
+        self.assertEqual(captured["path"], "/memories")
+        self.assertEqual(captured["body"]["expiration_date"], "2999-01-01")
+        self.assertEqual(captured["body"]["metadata"]["expiration_date"], "2999-01-01")
+
+    def test_search_memories_filters_expired_results(self):
+        original_backend = server._backend
+
+        def fake_backend(method, path, body=None, query=None):
+            return {
+                "results": [
+                    {"id": "old", "metadata": {"expiration_date": "2000-01-01"}},
+                    {"id": "fresh", "metadata": {"expiration_date": "2999-01-01"}},
+                    {"id": "permanent", "metadata": {}},
+                ],
+                "count": 3,
+            }
+
+        server._backend = fake_backend
+        try:
+            result = server.search_memories({"query": "session"})
+        finally:
+            server._backend = original_backend
+
+        self.assertEqual([memory["id"] for memory in result["results"]], ["fresh", "permanent"])
+        self.assertEqual(result["count"], 2)
+
     def test_get_memories_filter_values_match_app_id_from_metadata(self):
         memory = {"id": "1", "metadata": {"app_id": "repo", "type": "decision"}}
         self.assertTrue(server._matches(memory, {"app_id": "repo", "type": "decision"}))

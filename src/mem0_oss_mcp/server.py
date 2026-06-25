@@ -5,6 +5,7 @@ import os
 import sys
 import time
 import uuid
+from datetime import date, datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -149,9 +150,58 @@ def _merge_flat_filters(items: list[Any]) -> JSON | None:
     return merged
 
 
-def _memory_app_id(memory: JSON) -> Any:
+def _memory_metadata(memory: JSON) -> JSON:
     metadata = memory.get("metadata") or memory.get("metadata_") or {}
+    return metadata if isinstance(metadata, dict) else {}
+
+
+def _memory_app_id(memory: JSON) -> Any:
+    metadata = _memory_metadata(memory)
     return metadata.get("app_id") or memory.get("app_id")
+
+
+def _expiration_value(memory: JSON) -> Any:
+    if not isinstance(memory, dict):
+        return None
+    return _memory_metadata(memory).get("expiration_date") or memory.get("expiration_date")
+
+
+def _is_expired(memory: JSON) -> bool:
+    value = _expiration_value(memory)
+    if not value:
+        return False
+    if isinstance(value, datetime):
+        expires_at = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        return expires_at <= datetime.now(timezone.utc)
+    if isinstance(value, date):
+        return value < date.today()
+    if not isinstance(value, str):
+        return False
+    raw = value.strip()
+    if not raw:
+        return False
+    try:
+        if len(raw) <= 10:
+            return date.fromisoformat(raw[:10]) < date.today()
+        expires_at = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    return expires_at <= datetime.now(timezone.utc)
+
+
+def _without_expired(result: Any) -> Any:
+    if isinstance(result, list):
+        return [memory for memory in result if not _is_expired(memory)]
+    if isinstance(result, dict) and isinstance(result.get("results"), list):
+        filtered = [memory for memory in result["results"] if not _is_expired(memory)]
+        out = dict(result)
+        out["results"] = filtered
+        if "count" in out:
+            out["count"] = len(filtered)
+        return out
+    return result
 
 
 def _matches(memory: JSON, values: JSON) -> bool:
@@ -159,7 +209,7 @@ def _matches(memory: JSON, values: JSON) -> bool:
         if key == "app_id":
             actual = _memory_app_id(memory)
         elif key == "type":
-            actual = (memory.get("metadata") or memory.get("metadata_") or {}).get("type")
+            actual = _memory_metadata(memory).get("type")
         else:
             actual = memory.get(key)
         if isinstance(expected, dict) and "in" in expected:
@@ -188,12 +238,17 @@ def add_memory(args: JSON) -> JSON:
     metadata = dict(args.get("metadata") or {})
     app_id = args.get("app_id") or metadata.get("app_id") or Config.default_app_id
     metadata.setdefault("app_id", app_id)
+    expiration_date = args.get("expiration_date")
+    if expiration_date is not None:
+        metadata.setdefault("expiration_date", expiration_date)
 
     body: JSON = {
         "messages": messages,
         "metadata": metadata,
         "user_id": args.get("user_id") or Config.default_user_id,
     }
+    if expiration_date is not None:
+        body["expiration_date"] = expiration_date
     for key in ("agent_id", "run_id", "infer", "memory_type", "prompt"):
         if key in args and args[key] is not None:
             body[key] = args[key]
@@ -240,7 +295,7 @@ def search_memories(args: JSON) -> Any:
         if args.get(key) is not None:
             body["filters"].setdefault(key, args[key])
 
-    return _backend("POST", "/search", body)
+    return _without_expired(_backend("POST", "/search", body))
 
 
 def get_memories(args: JSON) -> JSON:
@@ -255,7 +310,7 @@ def get_memories(args: JSON) -> JSON:
     items = result.get("results", result if isinstance(result, list) else [])
     if not isinstance(items, list):
         items = []
-    filtered = [m for m in items if _matches(m, values)]
+    filtered = [m for m in items if not _is_expired(m) and _matches(m, values)]
     return _paged(filtered, args)
 
 
