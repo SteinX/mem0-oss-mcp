@@ -110,6 +110,33 @@ class MappingTests(unittest.TestCase):
         self.assertEqual([memory["id"] for memory in result["results"]], ["fresh", "permanent"])
         self.assertEqual(result["count"], 2)
 
+    def test_search_memories_overfetches_before_expiration_filtering(self):
+        captured = {}
+        original_backend = server._backend
+
+        def fake_backend(method, path, body=None, query=None):
+            captured.update({"method": method, "path": path, "body": body, "query": query})
+            return {
+                "results": [
+                    {"id": "old-1", "metadata": {"expiration_date": "2000-01-01"}},
+                    {"id": "old-2", "metadata": {"expiration_date": "2000-01-01"}},
+                    {"id": "fresh-1", "metadata": {"expiration_date": "2999-01-01"}},
+                    {"id": "fresh-2", "metadata": {"expiration_date": "2999-01-01"}},
+                    {"id": "fresh-3", "metadata": {"expiration_date": "2999-01-01"}},
+                ],
+                "count": 5,
+            }
+
+        server._backend = fake_backend
+        try:
+            result = server.search_memories({"query": "session", "top_k": 2})
+        finally:
+            server._backend = original_backend
+
+        self.assertGreater(captured["body"]["top_k"], 2)
+        self.assertEqual([memory["id"] for memory in result["results"]], ["fresh-1", "fresh-2"])
+        self.assertEqual(result["count"], 2)
+
     def test_app_scoped_delete_includes_expired_memories(self):
         deleted = []
         original_backend = server._backend

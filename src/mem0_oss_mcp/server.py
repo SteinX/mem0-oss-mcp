@@ -204,6 +204,27 @@ def _without_expired(result: Any) -> Any:
     return result
 
 
+def _search_fetch_limit(requested: int) -> int:
+    if requested <= 0:
+        return requested
+    return max(requested * 3, requested + 10)
+
+
+def _limit_result_count(result: Any, limit: int | None) -> Any:
+    if limit is None:
+        return result
+    if isinstance(result, list):
+        return result[:limit]
+    if isinstance(result, dict) and isinstance(result.get("results"), list):
+        trimmed = result["results"][:limit]
+        out = dict(result)
+        out["results"] = trimmed
+        if "count" in out:
+            out["count"] = len(trimmed)
+        return out
+    return result
+
+
 def _matches(memory: JSON, values: JSON) -> bool:
     for key, expected in values.items():
         if key == "app_id":
@@ -284,9 +305,11 @@ def search_memories(args: JSON) -> Any:
         raise ValueError("search_memories requires query")
 
     body: JSON = {"query": query, "filters": normalize_filters(args.get("filters") or {})}
+    requested_top_k: int | None = None
     top_k = _first(args, "top_k", "topK", "limit")
     if top_k is not None:
-        body["top_k"] = int(top_k)
+        requested_top_k = int(top_k)
+        body["top_k"] = _search_fetch_limit(requested_top_k)
     for key in ("threshold", "explain"):
         if key in args and args[key] is not None:
             body[key] = args[key]
@@ -295,7 +318,8 @@ def search_memories(args: JSON) -> Any:
         if args.get(key) is not None:
             body["filters"].setdefault(key, args[key])
 
-    return _without_expired(_backend("POST", "/search", body))
+    result = _without_expired(_backend("POST", "/search", body))
+    return _limit_result_count(result, requested_top_k)
 
 
 def get_memories(args: JSON) -> JSON:
