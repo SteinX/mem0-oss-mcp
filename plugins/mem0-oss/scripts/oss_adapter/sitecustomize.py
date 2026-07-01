@@ -203,7 +203,7 @@ def dispatch_platform_call(
             return call_tool("delete_all_memories", args, timeout=timeout)
         return call_tool("get_memories", args, timeout=timeout)
 
-    if path.startswith("/v3/memories/"):
+    if path.startswith(("/v3/memories/", "/v1/memories/")):
         memory_id = urllib.parse.unquote(path.rsplit("/", 1)[-1])
         if memory_id in {"events", "event"}:
             return call_tool("get_event_status", args, timeout=timeout)

@@ -378,8 +378,9 @@ def test_installer_generates_full_experience_from_upstream_fixture(tmp_path: Pat
     plugin_root = marketplace_root / "plugins" / "mem0-example"
     assert (plugin_root / "scripts" / "sitecustomize.py").is_file()
     assert (plugin_root / "scripts" / "mem0_oss_env.sh").is_file()
-    assert "No-op replacement for hosted Mem0 Platform setup helpers" in (
-        plugin_root / "scripts" / "auto_import.py"
+    assert "hosted import" in (plugin_root / "scripts" / "auto_import.py").read_text()
+    assert "OSS-safe replacement for hosted Mem0 Platform category setup" in (
+        plugin_root / "scripts" / "auto_setup_categories.py"
     ).read_text()
     assert "Mem0 OSS Onboarding" in (plugin_root / "skills" / "onboard" / "SKILL.md").read_text()
     assert (plugin_root / "skills" / "mem0-oss" / "SKILL.md").is_file()
