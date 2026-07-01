@@ -224,12 +224,15 @@ def write_oss_adapter(source_root: Path, plugin_root: Path) -> None:
     copy_adapter_file(adapter_root / "mem0_oss_env.sh", scripts_dir / "mem0_oss_env.sh", executable=True)
     write_stdio_bridge(source_root, plugin_root)
 
-    # These upstream background helpers are Platform-specific. Replacing the
-    # generated copies avoids reaching api.mem0.ai while keeping upstream hook
-    # scripts otherwise intact.
-    for script in ("auto_import.py", "auto_setup_categories.py"):
-        if (scripts_dir / script).exists():
-            copy_adapter_file(adapter_root / "noop_platform_setup.py", scripts_dir / script, executable=True)
+    # The upstream categories helper uses hosted Platform project APIs that OSS
+    # does not expose. Keep auto_import.py intact: its urllib calls are routed
+    # through sitecustomize.py to the local OSS MCP bridge.
+    if (scripts_dir / "auto_setup_categories.py").exists():
+        copy_adapter_file(
+            adapter_root / "noop_platform_setup.py",
+            scripts_dir / "auto_setup_categories.py",
+            executable=True,
+        )
 
     onboard = plugin_root / "skills" / "onboard" / "SKILL.md"
     if onboard.exists():

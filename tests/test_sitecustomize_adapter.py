@@ -147,3 +147,18 @@ def test_sitecustomize_maps_v1_events_list(monkeypatch) -> None:
 
     assert adapter.dispatch_platform_call(parsed, "GET", {}) == {"events": []}
     assert calls == [("list_events", {"page": 2, "page_size": 10}, None)]
+
+
+def test_sitecustomize_maps_v1_memory_delete(monkeypatch) -> None:
+    adapter = load_adapter()
+    calls = []
+
+    def fake_call_tool(name, arguments, timeout=None):
+        calls.append((name, arguments, timeout))
+        return {"message": "deleted"}
+
+    monkeypatch.setattr(adapter, "call_tool", fake_call_tool)
+    parsed = urllib.parse.urlparse("https://api.mem0.ai/v1/memories/mem-123/")
+
+    assert adapter.dispatch_platform_call(parsed, "DELETE", {}) == {"message": "deleted"}
+    assert calls == [("delete_memory", {"id": "mem-123"}, None)]
