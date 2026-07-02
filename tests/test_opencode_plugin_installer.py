@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -108,6 +109,45 @@ def test_opencode_installer_generates_oss_plugin_copy(tmp_path: Path) -> None:
     assert 'tokenEnvVar: "MEM0_EXAMPLE_TOKEN"' in source
     assert f'envFile: "{env_file}"' in source
     assert "const apiKey = process.env.MEM0_API_KEY" in source
+
+
+def test_opencode_installer_writes_private_env_file_from_token(tmp_path: Path) -> None:
+    target_root = tmp_path / "opencode-plugins"
+    upstream_root = make_upstream_opencode_fixture(tmp_path / "mem0-upstream")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(INSTALLER),
+            "--url",
+            "https://mem0.example.test:18443/mcp",
+            "--name",
+            "mem0-example",
+            "--token-env-var",
+            "MEM0_EXAMPLE_TOKEN",
+            "--token",
+            "secret-token",
+            "--target-root",
+            str(target_root),
+            "--upstream-plugin-dir",
+            str(upstream_root),
+            "--no-build",
+        ],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert "secret-token" not in result.stdout
+    env_file = target_root / "env" / "mem0-example.env"
+    assert env_file.read_text(encoding="utf-8") == "MEM0_EXAMPLE_TOKEN=secret-token\n"
+    assert stat.S_IMODE(env_file.stat().st_mode) == 0o600
+
+    source = (target_root / "mem0-example" / "opencode-mem0.ts").read_text()
+    assert "secret-token" not in source
+    assert 'url: "https://mem0.example.test:18443/mcp"' in source
+    assert 'tokenEnvVar: "MEM0_EXAMPLE_TOKEN"' in source
+    assert f'envFile: "{env_file}"' in source
 
 
 def test_opencode_adapter_routes_memory_client_calls_to_mcp(tmp_path: Path) -> None:

@@ -48,26 +48,28 @@ codex plugin marketplace add SteinX/mem0-oss-mcp
 codex plugin add mem0-oss@mem0-oss-mcp
 ```
 
-For Codex Desktop, or for any host, port, domain, or token environment variable
-that should live outside the Codex process environment, generate a local plugin
-instance instead of editing files in this repository. Passing `--env-file` is
-recommended for Codex Desktop: the generated MCP config runs a local stdio
-bridge that reads the token from the dotenv file and forwards JSON-RPC to the
-HTTP MCP endpoint.
+For Codex Desktop, or for any host, port, domain, or token that should live
+outside the Codex process environment, generate a local plugin instance instead
+of editing files in this repository. Pass the bridge endpoint and token at
+install time; the installer writes the token to a local private dotenv file and
+the generated MCP config stores only the endpoint, token variable name, and
+dotenv path.
 
 ```bash
 python3 plugins/mem0-oss/scripts/install_codex_plugin.py \
   --url http://<bridge-host>:<bridge-port>/mcp \
-  --token-env-var MEM0_OSS_MCP_TOKEN \
-  --env-file /path/to/bridge.env \
+  --token "$MEM0_OSS_MCP_TOKEN" \
   --install
 ```
 
 The installer writes a local marketplace under
 `~/.mem0-oss-mcp/codex-plugins`, patches only that generated copy, and then
-installs it through `codex plugin add`. It never writes token values into the
-plugin config; the dotenv file should contain the named token variable, for
-example `MEM0_OSS_MCP_TOKEN=change-me`.
+installs it through `codex plugin add`. It never writes token values into
+`.mcp.json`, hook commands, or repository files. By default, token values passed
+with `--token` or `--token-stdin` are stored in
+`~/.mem0-oss-mcp/codex-plugins/env/<plugin-name>.env` with owner-only
+permissions. You can still pass `--env-file /path/to/bridge.env` to choose the
+dotenv location yourself.
 
 For the full official Mem0 Codex plugin experience, including skills and
 lifecycle hooks, use the official Mem0 repository submodule as the upstream
@@ -78,9 +80,9 @@ git submodule update --init --depth 1 third_party/mem0
 
 python3 plugins/mem0-oss/scripts/install_codex_plugin.py \
   --url http://<bridge-host>:<bridge-port>/mcp \
+  --token "$MEM0_OSS_MCP_TOKEN" \
   --token-env-var MEM0_OSS_MCP_TOKEN \
   --with-hooks \
-  --env-file /path/to/bridge.env \
   --install
 ```
 
@@ -111,9 +113,9 @@ python3 plugins/mem0-oss/scripts/install_codex_plugin.py \
   --name mem0-home \
   --display-name "Mem0 Home" \
   --url https://mem0-home.example.com:18443/mcp \
+  --token "$MEM0_HOME_MCP_TOKEN" \
   --token-env-var MEM0_HOME_MCP_TOKEN \
   --with-hooks \
-  --env-file /path/to/bridge.env \
   --install
 ```
 
@@ -129,8 +131,7 @@ git submodule update --init --depth 1 third_party/mem0
 
 python3 plugins/mem0-oss/scripts/install_opencode_plugin.py \
   --url http://<bridge-host>:<bridge-port>/mcp \
-  --token-env-var MEM0_OSS_MCP_TOKEN \
-  --env-file /path/to/bridge.env \
+  --token "$MEM0_OSS_MCP_TOKEN" \
   --install
 ```
 
@@ -141,12 +142,10 @@ plugins from that directory at startup. The generated plugin keeps the upstream
 OpenCode hooks, native tools, and skills, while its memory client forwards
 operations to `mem0-oss-mcp` through JSON-RPC `tools/call`.
 
-Token values are not written to plugin source. Store the named token variable in
-the dotenv file, for example:
-
-```dotenv
-MEM0_OSS_MCP_TOKEN=change-me
-```
+Token values passed with `--token` or `--token-stdin` are written to a local
+private dotenv file under `~/.mem0-oss-mcp/opencode-plugins/env/`; they are not
+written to generated TypeScript source. Pass `--env-file` when you want to
+choose the dotenv path yourself.
 
 To update the upstream OpenCode plugin files, update the `third_party/mem0`
 submodule and rerun `install_opencode_plugin.py`.
