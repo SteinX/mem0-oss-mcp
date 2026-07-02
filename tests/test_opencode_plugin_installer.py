@@ -152,6 +152,42 @@ def test_opencode_installer_writes_private_env_file_from_token(tmp_path: Path) -
     assert f'envFile: "{env_file}"' in source
 
 
+def test_opencode_installer_tightens_existing_token_env_file(tmp_path: Path) -> None:
+    target_root = tmp_path / "opencode-plugins"
+    env_file = tmp_path / "bridge.env"
+    env_file.write_text("KEEP=value\nMEM0_EXAMPLE_TOKEN=old-token\n", encoding="utf-8")
+    env_file.chmod(0o644)
+    upstream_root = make_upstream_opencode_fixture(tmp_path / "mem0-upstream")
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(INSTALLER),
+            "--url",
+            "https://mem0.example.test:18443/mcp",
+            "--name",
+            "mem0-example",
+            "--token-env-var",
+            "MEM0_EXAMPLE_TOKEN",
+            "--token",
+            "new-token",
+            "--target-root",
+            str(target_root),
+            "--upstream-plugin-dir",
+            str(upstream_root),
+            "--env-file",
+            str(env_file),
+            "--no-build",
+        ],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert env_file.read_text(encoding="utf-8") == "KEEP=value\nMEM0_EXAMPLE_TOKEN=new-token\n"
+    assert stat.S_IMODE(env_file.stat().st_mode) == 0o600
+
+
 def test_opencode_adapter_routes_memory_client_calls_to_mcp(tmp_path: Path) -> None:
     if not shutil.which("bun"):
         pytest.skip("bun is required for this test")

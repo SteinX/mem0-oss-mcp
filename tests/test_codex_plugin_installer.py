@@ -252,6 +252,38 @@ def test_installer_writes_private_env_file_from_token(tmp_path: Path) -> None:
     }
 
 
+def test_installer_tightens_existing_token_env_file(tmp_path: Path) -> None:
+    marketplace_root = tmp_path / "codex-plugins"
+    env_file = tmp_path / "bridge.env"
+    env_file.write_text("KEEP=value\nMEM0_EXAMPLE_TOKEN=old-token\n", encoding="utf-8")
+    env_file.chmod(0o644)
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(INSTALLER),
+            "--url",
+            "https://mem0.example.test:18443/mcp",
+            "--name",
+            "mem0-example",
+            "--token-env-var",
+            "MEM0_EXAMPLE_TOKEN",
+            "--token",
+            "new-token",
+            "--marketplace-root",
+            str(marketplace_root),
+            "--env-file",
+            str(env_file),
+        ],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert env_file.read_text(encoding="utf-8") == "KEEP=value\nMEM0_EXAMPLE_TOKEN=new-token\n"
+    assert stat.S_IMODE(env_file.stat().st_mode) == 0o600
+
+
 def test_installer_rejects_missing_env_file_before_generating_config(tmp_path: Path) -> None:
     marketplace_root = tmp_path / "codex-plugins"
     missing_env = tmp_path / "missing.env"

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shlex
 import shutil
@@ -143,11 +144,15 @@ def write_token_env_file(path: Path, token_env_var: str, token: str) -> None:
             updated.append(raw)
     if not replaced:
         updated.append(assignment)
-    path.write_text("\n".join(updated) + "\n", encoding="utf-8")
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
-        path.chmod(0o600)
-    except OSError:
-        pass
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            fd = -1
+            handle.write("\n".join(updated) + "\n")
+    finally:
+        if fd != -1:
+            os.close(fd)
 
 
 def copy_plugin(source: Path, target: Path) -> None:

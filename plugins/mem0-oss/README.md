@@ -14,18 +14,20 @@ For Codex Desktop, generate a local plugin instance instead. Pass the bridge
 endpoint and token at install time; the installer writes the token to a local
 private dotenv file, while the generated MCP config stores only the URL,
 token variable name, and env-file path. This avoids requiring custom
-environment variables in the Codex process:
+environment variables in the Codex process. The recommended shell flow reads
+the token from stdin so it does not appear in process listings:
 
 ```bash
-python3 plugins/mem0-oss/scripts/install_codex_plugin.py \
+printf '%s\n' "$MEM0_OSS_MCP_TOKEN" | \
+  python3 plugins/mem0-oss/scripts/install_codex_plugin.py \
   --url http://<bridge-host>:<bridge-port>/mcp \
-  --token "$MEM0_OSS_MCP_TOKEN" \
+  --token-stdin \
   --install
 ```
 
 The installer writes a local marketplace under `~/.mem0-oss-mcp/codex-plugins`
-and rewrites only the generated copy. Token values passed with `--token` or
-`--token-stdin` are stored in
+and rewrites only the generated copy. Token values passed with `--token-stdin`
+or `--token` are stored in
 `~/.mem0-oss-mcp/codex-plugins/env/<plugin-name>.env` with owner-only
 permissions. You can still pass `--env-file /path/to/bridge.env` to choose the
 dotenv location yourself.
@@ -40,10 +42,11 @@ lifecycle hooks, initialize the official Mem0 submodule and generate from it:
 ```bash
 git submodule update --init --depth 1 third_party/mem0
 
-python3 plugins/mem0-oss/scripts/install_codex_plugin.py \
+printf '%s\n' "$MEM0_OSS_MCP_TOKEN" | \
+  python3 plugins/mem0-oss/scripts/install_codex_plugin.py \
   --url http://<bridge-host>:<bridge-port>/mcp \
   --with-hooks \
-  --token "$MEM0_OSS_MCP_TOKEN" \
+  --token-stdin \
   --install
 ```
 
@@ -56,10 +59,11 @@ upgrade them, update the submodule commit and rerun the installer.
 To use a custom token variable or plugin id:
 
 ```bash
-python3 plugins/mem0-oss/scripts/install_codex_plugin.py \
+printf '%s\n' "$MEM0_HOME_MCP_TOKEN" | \
+  python3 plugins/mem0-oss/scripts/install_codex_plugin.py \
   --name mem0-home \
   --url https://mem0-api.example.com:18443/mcp \
-  --token "$MEM0_HOME_MCP_TOKEN" \
+  --token-stdin \
   --token-env-var MEM0_HOME_MCP_TOKEN \
   --with-hooks \
   --install
@@ -77,15 +81,16 @@ a local OSS-compatible copy instead of editing the upstream plugin:
 ```bash
 git submodule update --init --depth 1 third_party/mem0
 
-python3 plugins/mem0-oss/scripts/install_opencode_plugin.py \
+printf '%s\n' "$MEM0_OSS_MCP_TOKEN" | \
+  python3 plugins/mem0-oss/scripts/install_opencode_plugin.py \
   --url http://<bridge-host>:<bridge-port>/mcp \
-  --token "$MEM0_OSS_MCP_TOKEN" \
+  --token-stdin \
   --install
 ```
 
 The generated copy lives under `~/.mem0-oss-mcp/opencode-plugins/<name>`. The
 installer builds it and writes a small loader into
 `~/.config/opencode/plugins/<name>.js`, which OpenCode loads on startup. Token
-values passed with `--token` or `--token-stdin` are stored in a local private
+values passed with `--token-stdin` or `--token` are stored in a local private
 dotenv file under `~/.mem0-oss-mcp/opencode-plugins/env/`, not in generated
 TypeScript source.
