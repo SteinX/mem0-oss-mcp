@@ -52,8 +52,21 @@ def validate_env_var(value: str) -> str:
     return value
 
 
+def validate_token_value(value: str) -> str:
+    token = value.strip()
+    if not token:
+        raise ValueError("token value must not be empty")
+    if any(char in token for char in "\r\n\0"):
+        raise ValueError("token value must be a single line")
+    return token
+
+
 def default_marketplace_root() -> Path:
     return Path.home() / ".mem0-oss-mcp" / "codex-plugins"
+
+
+def default_private_env_file(marketplace_root: Path, plugin_name: str) -> Path:
+    return marketplace_root / "env" / f"{plugin_name}.env"
 
 
 def plugin_root_from_script() -> Path:
@@ -155,9 +168,60 @@ def selected_mcp_transport(requested: str, env_file: Path | None) -> str:
     return requested
 
 
-def validate_env_file(path: Path | None) -> None:
-    if path is not None and not path.is_file():
+def validate_env_file(path: Path | None, *, allow_missing: bool = False) -> None:
+    if path is not None and not path.is_file() and not allow_missing:
         raise ValueError(f"--env-file does not exist: {path}")
+
+
+def env_file_from_args(
+    env_file: Path | None,
+    marketplace_root: Path,
+    plugin_name: str,
+    token: str | None,
+) -> Path | None:
+    if env_file is not None:
+        return env_file.expanduser().resolve()
+    if token is not None:
+        return default_private_env_file(marketplace_root, plugin_name)
+    return None
+
+
+def read_token_from_args(args: argparse.Namespace) -> str | None:
+    if args.token_stdin:
+        return validate_token_value(sys.stdin.read())
+    if args.token is not None:
+        return validate_token_value(args.token)
+    return None
+
+
+def dotenv_assignment(name: str, value: str) -> str:
+    return f"{name}={shlex.quote(value)}"
+
+
+def write_token_env_file(path: Path, token_env_var: str, token: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    assignment = dotenv_assignment(token_env_var, token)
+    updated: list[str] = []
+    replaced = False
+    for raw in lines:
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            updated.append(raw)
+            continue
+        key, _value = stripped.split("=", 1)
+        if key.strip() == token_env_var:
+            updated.append(assignment)
+            replaced = True
+        else:
+            updated.append(raw)
+    if not replaced:
+        updated.append(assignment)
+    path.write_text("\n".join(updated) + "\n", encoding="utf-8")
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
 
 
 def write_mcp_config(
@@ -469,6 +533,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--display-name", help="Display name shown in Codex")
     parser.add_argument("--server-name", default=DEFAULT_SERVER_NAME, help="MCP server name, default: mem0")
     parser.add_argument("--token-env-var", default=DEFAULT_TOKEN_ENV_VAR, help="Bearer token env var name")
+    token_group = parser.add_mutually_exclusive_group()
+    token_group.add_argument(
+        "--token",
+        help="Bearer token value to write into a local private dotenv file instead of requiring Codex env",
+    )
+    token_group.add_argument(
+        "--token-stdin",
+        action="store_true",
+        help="Read the bearer token value from stdin and write it into a local private dotenv file",
+    )
     parser.add_argument("--marketplace-name", default=DEFAULT_MARKETPLACE_NAME, help="Local marketplace name")
     parser.add_argument("--marketplace-root", type=Path, default=default_marketplace_root(), help="Local marketplace root")
     parser.add_argument(
@@ -510,14 +584,17 @@ def main() -> int:
     marketplace_name = normalize_name(args.marketplace_name)
     url = validate_url(args.url)
     token_env_var = validate_env_var(args.token_env_var)
+    token = read_token_from_args(args)
     display_name = args.display_name or " ".join(part.capitalize() for part in plugin_name.split("-"))
 
     local_source_root = plugin_root_from_script()
     marketplace_root = args.marketplace_root.expanduser().resolve()
     target_root = marketplace_root / "plugins" / plugin_name
     codex_dir = args.codex_dir.expanduser().resolve()
-    env_file = args.env_file.expanduser().resolve() if args.env_file else None
-    validate_env_file(env_file)
+    env_file = env_file_from_args(args.env_file, marketplace_root, plugin_name, token)
+    validate_env_file(env_file, allow_missing=token is not None)
+    if token is not None and args.mcp_transport == "http":
+        raise ValueError("--token and --token-stdin require --mcp-transport auto or stdio")
     mcp_transport = selected_mcp_transport(args.mcp_transport, env_file)
 
     upstream_dir = args.upstream_plugin_dir.expanduser().resolve()
@@ -536,6 +613,10 @@ def main() -> int:
         write_oss_adapter(local_source_root, target_root)
     elif mcp_transport == "stdio":
         write_stdio_bridge(local_source_root, target_root)
+
+    if token is not None:
+        assert env_file is not None
+        write_token_env_file(env_file, token_env_var, token)
 
     update_plugin_manifest(target_root, plugin_name, display_name)
     mcp_transport = write_mcp_config(target_root, server_name, url, token_env_var, env_file, mcp_transport)
@@ -560,11 +641,11 @@ def main() -> int:
     print(f"MCP URL: {url}")
     print(f"MCP transport: {mcp_transport}")
     print(f"Token env var: {token_env_var}")
+    if env_file is not None:
+        print(f"Token env file: {env_file}")
     if hooks_path is not None:
         print(f"Hooks: {hooks_path}")
         print(f"Codex hooks feature: {'unchanged' if args.no_enable_codex_hooks else 'enabled'}")
-        if env_file is not None:
-            print(f"Hook env file: {env_file}")
 
     if args.install:
         run_codex_install(marketplace_root, marketplace_name, plugin_name)
