@@ -69,3 +69,26 @@ python3 plugins/mem0-oss/scripts/install_codex_plugin.py \
 Use `--mcp-transport http` only when you explicitly want Codex to connect to
 the HTTP MCP endpoint directly through `bearer_token_env_var`. The default
 `--mcp-transport auto` chooses stdio when `--env-file` is present.
+
+## OpenCode
+
+OpenCode's official Mem0 plugin runs native TypeScript tools and hooks. Generate
+a local OSS-compatible copy instead of editing the upstream plugin:
+
+```bash
+git submodule update --init --depth 1 third_party/mem0
+
+python3 plugins/mem0-oss/scripts/install_opencode_plugin.py \
+  --url http://<bridge-host>:<bridge-port>/mcp \
+  --env-file /path/to/bridge.env \
+  --install
+```
+
+The generated copy lives under `~/.mem0-oss-mcp/opencode-plugins/<name>`. The
+installer builds it and writes a small loader into
+`~/.config/opencode/plugins/<name>.js`, which OpenCode loads on startup. The
+dotenv file should contain the bridge token variable, for example:
+
+```dotenv
+MEM0_OSS_MCP_TOKEN=change-me
+```
