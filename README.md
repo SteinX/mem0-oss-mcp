@@ -117,6 +117,40 @@ python3 plugins/mem0-oss/scripts/install_codex_plugin.py \
   --install
 ```
 
+## OpenCode plugin
+
+OpenCode's official Mem0 plugin is a native TypeScript plugin rather than an
+MCP-only config. To use that full plugin experience with Mem0 OSS, generate a
+local OpenCode plugin copy from the official Mem0 submodule and overlay the OSS
+compatibility client:
+
+```bash
+git submodule update --init --depth 1 third_party/mem0
+
+python3 plugins/mem0-oss/scripts/install_opencode_plugin.py \
+  --url http://<bridge-host>:<bridge-port>/mcp \
+  --token-env-var MEM0_OSS_MCP_TOKEN \
+  --env-file /path/to/bridge.env \
+  --install
+```
+
+The installer writes a generated copy under
+`~/.mem0-oss-mcp/opencode-plugins/<name>`, builds it with Bun, and installs a
+small loader in `~/.config/opencode/plugins/<name>.js`. OpenCode loads local
+plugins from that directory at startup. The generated plugin keeps the upstream
+OpenCode hooks, native tools, and skills, while its memory client forwards
+operations to `mem0-oss-mcp` through JSON-RPC `tools/call`.
+
+Token values are not written to plugin source. Store the named token variable in
+the dotenv file, for example:
+
+```dotenv
+MEM0_OSS_MCP_TOKEN=change-me
+```
+
+To update the upstream OpenCode plugin files, update the `third_party/mem0`
+submodule and rerun `install_opencode_plugin.py`.
+
 ## Run
 
 ```bash
