@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import stat
 import subprocess
@@ -114,6 +115,7 @@ def test_opencode_installer_generates_oss_plugin_copy(tmp_path: Path) -> None:
 def test_opencode_installer_writes_private_env_file_from_token(tmp_path: Path) -> None:
     target_root = tmp_path / "opencode-plugins"
     upstream_root = make_upstream_opencode_fixture(tmp_path / "mem0-upstream")
+    token = "secret'token # value"
 
     result = subprocess.run(
         [
@@ -126,7 +128,7 @@ def test_opencode_installer_writes_private_env_file_from_token(tmp_path: Path) -
             "--token-env-var",
             "MEM0_EXAMPLE_TOKEN",
             "--token",
-            "secret-token",
+            token,
             "--target-root",
             str(target_root),
             "--upstream-plugin-dir",
@@ -138,13 +140,13 @@ def test_opencode_installer_writes_private_env_file_from_token(tmp_path: Path) -
         check=True,
     )
 
-    assert "secret-token" not in result.stdout
+    assert token not in result.stdout
     env_file = target_root / "env" / "mem0-example.env"
-    assert env_file.read_text(encoding="utf-8") == "MEM0_EXAMPLE_TOKEN=secret-token\n"
+    assert env_file.read_text(encoding="utf-8") == f"MEM0_EXAMPLE_TOKEN={shlex.quote(token)}\n"
     assert stat.S_IMODE(env_file.stat().st_mode) == 0o600
 
     source = (target_root / "mem0-example" / "opencode-mem0.ts").read_text()
-    assert "secret-token" not in source
+    assert token not in source
     assert 'url: "https://mem0.example.test:18443/mcp"' in source
     assert 'tokenEnvVar: "MEM0_EXAMPLE_TOKEN"' in source
     assert f'envFile: "{env_file}"' in source
@@ -189,6 +191,16 @@ if (process.env.MEM0_API_KEY !== "secret-token") {
   throw new Error(`MEM0_API_KEY was not initialized: ${process.env.MEM0_API_KEY}`);
 }
 
+const envFile = "__ENV_FILE__";
+await Bun.write(envFile, `MEM0_OSS_MCP_TOKEN='abc'"'"'def # token'\n`);
+delete process.env.MEM0_API_KEY;
+delete process.env.MEM0_OSS_MCP_TOKEN;
+delete process.env.MEM0_OSS_ENV_FILE;
+initializeMem0OssEnv({tokenEnvVar: "MEM0_OSS_MCP_TOKEN", envFile});
+if (process.env.MEM0_API_KEY !== "abc'def # token") {
+  throw new Error(`dotenv token was not round-tripped: ${process.env.MEM0_API_KEY}`);
+}
+
 const client = new MemoryClient({apiKey: process.env.MEM0_API_KEY!});
 const add = await client.add([{role: "user", content: "hello"}], {userId: "root", appId: "mem0"});
 const search = await client.search("hello", {topK: 3, filters: {AND: [{user_id: "root"}]}});
@@ -198,7 +210,7 @@ if (add.event_id !== "evt_1") throw new Error("add result mismatch");
 if (search.results[0].id !== "mem_1") throw new Error("search result mismatch");
 if (event.data.status !== "SUCCEEDED") throw new Error("event result mismatch");
 if (calls[0].url !== "https://bridge.example/mcp") throw new Error(`bad url ${calls[0].url}`);
-if (calls.some((call) => call.auth !== "Bearer secret-token")) throw new Error("missing bearer token");
+if (calls.some((call) => call.auth !== "Bearer abc'def # token")) throw new Error("missing bearer token");
 if (calls[0].name !== "add_memory") throw new Error(`bad first tool ${calls[0].name}`);
 if (calls[0].args.user_id !== "root" || calls[0].args.app_id !== "mem0") {
   throw new Error(`identity args not normalized: ${JSON.stringify(calls[0].args)}`);
@@ -209,7 +221,7 @@ if (calls[1].name !== "search_memories" || calls[1].args.top_k !== 3) {
 if (calls[2].name !== "get_event_status" || calls[2].args.event_id !== "evt_1") {
   throw new Error(`event args not mapped: ${JSON.stringify(calls[2])}`);
 }
-""".replace("__ADAPTER_URI__", ADAPTER.as_uri()),
+""".replace("__ADAPTER_URI__", ADAPTER.as_uri()).replace("__ENV_FILE__", (tmp_path / "bridge.env").as_posix()),
         encoding="utf-8",
     )
 
