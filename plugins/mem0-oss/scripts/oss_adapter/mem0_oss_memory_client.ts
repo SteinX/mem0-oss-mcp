@@ -13,14 +13,61 @@ export interface Mem0OssEnvOptions {
 function parseDotenvValue(raw: string): string {
   const value = raw.trim();
   if (!value) return "";
-  if (
-    (value.startsWith('"') && value.endsWith('"')) ||
-    (value.startsWith("'") && value.endsWith("'"))
-  ) {
-    return value.slice(1, -1);
+
+  let result = "";
+  let quote: "'" | '"' | undefined;
+  let escaped = false;
+
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+
+    if (quote === "'") {
+      if (char === "'") {
+        quote = undefined;
+      } else {
+        result += char;
+      }
+      continue;
+    }
+
+    if (quote === '"') {
+      if (escaped) {
+        result += char;
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === '"') {
+        quote = undefined;
+      } else {
+        result += char;
+      }
+      continue;
+    }
+
+    if (escaped) {
+      result += char;
+      escaped = false;
+      continue;
+    }
+
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (/\s/.test(char) && /^\s+#/.test(value.slice(index))) {
+      break;
+    }
+    result += char;
   }
-  const comment = value.match(/\s+#/);
-  return (comment ? value.slice(0, comment.index) : value).trim();
+
+  if (escaped) {
+    result += "\\";
+  }
+  return result;
 }
 
 function readDotenv(path: string | undefined): Record<string, string> {

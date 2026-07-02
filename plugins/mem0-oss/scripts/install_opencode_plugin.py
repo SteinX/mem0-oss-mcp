@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -47,6 +49,15 @@ def validate_env_var(value: str) -> str:
     return value
 
 
+def validate_token_value(value: str) -> str:
+    token = value.strip()
+    if not token:
+        raise ValueError("token value must not be empty")
+    if any(char in token for char in "\r\n\0"):
+        raise ValueError("token value must be a single line")
+    return token
+
+
 def plugin_root_from_script() -> Path:
     return Path(__file__).resolve().parents[1]
 
@@ -61,6 +72,10 @@ def default_upstream_opencode_plugin_dir() -> Path:
 
 def default_target_root() -> Path:
     return Path.home() / ".mem0-oss-mcp" / "opencode-plugins"
+
+
+def default_private_env_file(target_base: Path, plugin_name: str) -> Path:
+    return target_base / "env" / f"{plugin_name}.env"
 
 
 def default_opencode_dir() -> Path:
@@ -80,9 +95,64 @@ def validate_upstream_opencode_plugin_dir(path: Path) -> Path:
     raise ValueError(f"not a Mem0 OpenCode plugin directory: {path}")
 
 
-def validate_env_file(path: Path | None) -> None:
-    if path is not None and not path.is_file():
+def validate_env_file(path: Path | None, *, allow_missing: bool = False) -> None:
+    if path is not None and not path.is_file() and not allow_missing:
         raise ValueError(f"--env-file does not exist: {path}")
+
+
+def env_file_from_args(
+    env_file: Path | None,
+    target_base: Path,
+    plugin_name: str,
+    token: str | None,
+) -> Path | None:
+    if env_file is not None:
+        return env_file.expanduser().resolve()
+    if token is not None:
+        return default_private_env_file(target_base, plugin_name)
+    return None
+
+
+def read_token_from_args(args: argparse.Namespace) -> str | None:
+    if args.token_stdin:
+        return validate_token_value(sys.stdin.read())
+    if args.token is not None:
+        return validate_token_value(args.token)
+    return None
+
+
+def dotenv_assignment(name: str, value: str) -> str:
+    return f"{name}={shlex.quote(value)}"
+
+
+def write_token_env_file(path: Path, token_env_var: str, token: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    assignment = dotenv_assignment(token_env_var, token)
+    updated: list[str] = []
+    replaced = False
+    for raw in lines:
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            updated.append(raw)
+            continue
+        key, _value = stripped.split("=", 1)
+        if key.strip() == token_env_var:
+            updated.append(assignment)
+            replaced = True
+        else:
+            updated.append(raw)
+    if not replaced:
+        updated.append(assignment)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            fd = -1
+            handle.write("\n".join(updated) + "\n")
+    finally:
+        if fd != -1:
+            os.close(fd)
 
 
 def copy_plugin(source: Path, target: Path) -> None:
@@ -219,6 +289,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--name", default=DEFAULT_PLUGIN_NAME, help="Generated plugin id, default: mem0-oss")
     parser.add_argument("--display-name", help="Display name used in generated package metadata")
     parser.add_argument("--token-env-var", default=DEFAULT_TOKEN_ENV_VAR, help="Bearer token env var name")
+    token_group = parser.add_mutually_exclusive_group()
+    token_group.add_argument(
+        "--token",
+        help="Bearer token value to write into a local private dotenv file instead of requiring OpenCode env",
+    )
+    token_group.add_argument(
+        "--token-stdin",
+        action="store_true",
+        help="Read the bearer token value from stdin and write it into a local private dotenv file",
+    )
     parser.add_argument(
         "--target-root",
         type=Path,
@@ -256,17 +336,22 @@ def main() -> int:
     plugin_name = normalize_name(args.name)
     url = validate_url(args.url)
     token_env_var = validate_env_var(args.token_env_var)
+    token = read_token_from_args(args)
     display_name = args.display_name or " ".join(part.capitalize() for part in plugin_name.split("-"))
-    env_file = args.env_file.expanduser().resolve() if args.env_file else None
-    validate_env_file(env_file)
 
     local_source_root = plugin_root_from_script()
     source_root = validate_upstream_opencode_plugin_dir(args.upstream_plugin_dir)
-    target_root = args.target_root.expanduser().resolve() / plugin_name
+    target_base = args.target_root.expanduser().resolve()
+    target_root = target_base / plugin_name
     opencode_dir = args.opencode_dir.expanduser().resolve()
+    env_file = env_file_from_args(args.env_file, target_base, plugin_name, token)
+    validate_env_file(env_file, allow_missing=token is not None)
 
     copy_plugin(source_root, target_root)
     write_oss_adapter(local_source_root, target_root)
+    if token is not None:
+        assert env_file is not None
+        write_token_env_file(env_file, token_env_var, token)
     patch_opencode_source(target_root, url, token_env_var, env_file)
     update_package_json(target_root, plugin_name, display_name)
 

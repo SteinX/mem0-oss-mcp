@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import shlex
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -208,6 +209,79 @@ def test_installer_uses_stdio_bridge_when_env_file_is_set(tmp_path: Path) -> Non
     }
     assert "url" not in server
     assert "bearer_token_env_var" not in server
+
+
+def test_installer_writes_private_env_file_from_token(tmp_path: Path) -> None:
+    marketplace_root = tmp_path / "codex-plugins"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(INSTALLER),
+            "--url",
+            "https://mem0.example.test:18443/mcp",
+            "--name",
+            "mem0-example",
+            "--token-env-var",
+            "MEM0_EXAMPLE_TOKEN",
+            "--token",
+            "secret-token",
+            "--marketplace-root",
+            str(marketplace_root),
+        ],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert "secret-token" not in result.stdout
+    env_file = marketplace_root / "env" / "mem0-example.env"
+    assert env_file.read_text(encoding="utf-8") == "MEM0_EXAMPLE_TOKEN=secret-token\n"
+    assert stat.S_IMODE(env_file.stat().st_mode) == 0o600
+
+    plugin_root = marketplace_root / "plugins" / "mem0-example"
+    mcp_raw = (plugin_root / ".mcp.json").read_text(encoding="utf-8")
+    assert "secret-token" not in mcp_raw
+    mcp = json.loads(mcp_raw)
+    server = mcp["mcpServers"]["mem0"]
+    assert server["command"] == "python3"
+    assert server["env"] == {
+        "MEM0_OSS_MCP_URL": "https://mem0.example.test:18443/mcp",
+        "MEM0_OSS_MCP_TOKEN_ENV_VAR": "MEM0_EXAMPLE_TOKEN",
+        "MEM0_OSS_ENV_FILE": str(env_file),
+    }
+
+
+def test_installer_tightens_existing_token_env_file(tmp_path: Path) -> None:
+    marketplace_root = tmp_path / "codex-plugins"
+    env_file = tmp_path / "bridge.env"
+    env_file.write_text("KEEP=value\nMEM0_EXAMPLE_TOKEN=old-token\n", encoding="utf-8")
+    env_file.chmod(0o644)
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(INSTALLER),
+            "--url",
+            "https://mem0.example.test:18443/mcp",
+            "--name",
+            "mem0-example",
+            "--token-env-var",
+            "MEM0_EXAMPLE_TOKEN",
+            "--token",
+            "new-token",
+            "--marketplace-root",
+            str(marketplace_root),
+            "--env-file",
+            str(env_file),
+        ],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert env_file.read_text(encoding="utf-8") == "KEEP=value\nMEM0_EXAMPLE_TOKEN=new-token\n"
+    assert stat.S_IMODE(env_file.stat().st_mode) == 0o600
 
 
 def test_installer_rejects_missing_env_file_before_generating_config(tmp_path: Path) -> None:
