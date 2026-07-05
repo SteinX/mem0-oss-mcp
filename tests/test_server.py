@@ -206,6 +206,25 @@ class MappingTests(unittest.TestCase):
         self.assertEqual(result["count"], 2)
         self.assertEqual([memory["id"] for memory in result["results"]], ["repo-1"])
 
+    def test_get_memories_caps_backend_fetch_limit_at_oss_route_limit(self):
+        captured = {}
+        original_backend = server._backend
+        original_limit = server.Config.list_fetch_limit
+
+        def fake_backend(method, path, body=None, query=None):
+            captured.update({"method": method, "path": path, "body": body, "query": query})
+            return {"results": []}
+
+        server._backend = fake_backend
+        server.Config.list_fetch_limit = 5000
+        try:
+            server.get_memories({"user_id": "u1"})
+        finally:
+            server._backend = original_backend
+            server.Config.list_fetch_limit = original_limit
+
+        self.assertEqual(captured["query"]["top_k"], 1000)
+
     def test_tools_list_contains_official_names(self):
         names = {tool["name"] for tool in server.tool_schema()}
         self.assertEqual(

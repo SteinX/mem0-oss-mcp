@@ -17,6 +17,7 @@ from . import __version__
 
 
 JSON = dict[str, Any]
+OSS_MEMORIES_TOP_K_LIMIT = 1000
 
 
 class BackendError(RuntimeError):
@@ -333,7 +334,7 @@ def get_memories(args: JSON) -> JSON:
 
     query = {k: values.get(k) for k in ("user_id", "agent_id", "run_id")}
     if Config.list_fetch_limit > 0:
-        query["top_k"] = Config.list_fetch_limit
+        query["top_k"] = min(Config.list_fetch_limit, OSS_MEMORIES_TOP_K_LIMIT)
     if include_expired:
         query["show_expired"] = True
     result = _backend("GET", "/memories", query=query)
