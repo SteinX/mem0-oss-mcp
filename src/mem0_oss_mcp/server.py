@@ -35,6 +35,7 @@ class Config:
     timeout = float(os.environ.get("MEM0_OSS_TIMEOUT", "30"))
     default_user_id = os.environ.get("MEM0_OSS_DEFAULT_USER_ID", os.environ.get("USER", "codex"))
     default_app_id = os.environ.get("MEM0_OSS_DEFAULT_APP_ID", "default")
+    list_fetch_limit = int(os.environ.get("MEM0_OSS_LIST_FETCH_LIMIT", "1000"))
 
 
 EVENTS: dict[str, JSON] = {}
@@ -331,6 +332,10 @@ def get_memories(args: JSON) -> JSON:
             values[key] = args[key]
 
     query = {k: values.get(k) for k in ("user_id", "agent_id", "run_id")}
+    if Config.list_fetch_limit > 0:
+        query["top_k"] = Config.list_fetch_limit
+    if include_expired:
+        query["show_expired"] = True
     result = _backend("GET", "/memories", query=query)
     items = result.get("results", result if isinstance(result, list) else [])
     if not isinstance(items, list):

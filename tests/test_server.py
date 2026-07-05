@@ -168,6 +168,44 @@ class MappingTests(unittest.TestCase):
         self.assertTrue(server._matches(memory, {"app_id": "repo", "type": "decision"}))
         self.assertFalse(server._matches(memory, {"app_id": "other"}))
 
+    def test_get_memories_fetches_large_backend_page_before_local_app_filter(self):
+        captured = {}
+        original_backend = server._backend
+        original_limit = server.Config.list_fetch_limit
+
+        def fake_backend(method, path, body=None, query=None):
+            captured.update({"method": method, "path": path, "body": body, "query": query})
+            if query.get("top_k"):
+                return {
+                    "results": [
+                        {"id": "other", "user_id": "u1", "metadata": {"app_id": "other"}},
+                        {"id": "repo-1", "user_id": "u1", "metadata": {"app_id": "repo"}},
+                        {"id": "repo-2", "user_id": "u1", "metadata": {"app_id": "repo"}},
+                    ]
+                }
+            return {
+                "results": [
+                    {"id": "other", "user_id": "u1", "metadata": {"app_id": "other"}},
+                ]
+            }
+
+        server._backend = fake_backend
+        server.Config.list_fetch_limit = 1000
+        try:
+            result = server.get_memories(
+                {
+                    "filters": {"AND": [{"user_id": "u1"}, {"app_id": "repo"}]},
+                    "page_size": 1,
+                }
+            )
+        finally:
+            server._backend = original_backend
+            server.Config.list_fetch_limit = original_limit
+
+        self.assertEqual(captured["query"], {"user_id": "u1", "agent_id": None, "run_id": None, "top_k": 1000})
+        self.assertEqual(result["count"], 2)
+        self.assertEqual([memory["id"] for memory in result["results"]], ["repo-1"])
+
     def test_tools_list_contains_official_names(self):
         names = {tool["name"] for tool in server.tool_schema()}
         self.assertEqual(
