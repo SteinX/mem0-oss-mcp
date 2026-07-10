@@ -307,6 +307,10 @@ def write_oss_adapter(source_root: Path, plugin_root: Path) -> None:
     if onboard.exists():
         copy_adapter_file(adapter_root / "onboard" / "SKILL.md", onboard)
 
+    dream = plugin_root / "skills" / "dream" / "SKILL.md"
+    if dream.exists():
+        copy_adapter_file(adapter_root / "dream" / "SKILL.md", dream)
+
 
 def update_marketplace(root: Path, marketplace_name: str, plugin_name: str) -> Path:
     marketplace_path = root / ".agents" / "plugins" / "marketplace.json"

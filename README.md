@@ -17,10 +17,24 @@ MEM0_OSS_MCP_TOKEN=change-me
 
 MEM0_OSS_DEFAULT_USER_ID=codex
 MEM0_OSS_DEFAULT_APP_ID=default
+MEM0_OSS_LIST_FETCH_LIMIT=5000
+MEM0_OSS_BACKEND_LIST_RETRY_LIMIT=1000
+# Optional: only set when backend top_k should differ from MEM0_OSS_LIST_FETCH_LIMIT.
+# MEM0_OSS_BACKEND_LIST_FETCH_LIMIT=5000
 ```
 
 `MEM0_OSS_BASE_URL` is the base URL of your Mem0 OSS REST server. The port is
 not assumed.
+
+`get_memories` fetches a larger backend candidate window before applying local
+`app_id` and metadata filters. `MEM0_OSS_LIST_FETCH_LIMIT` is the sidecar target
+window and, by default, the largest `top_k` sent to the backend. Set
+`MEM0_OSS_BACKEND_LIST_FETCH_LIMIT` only when the backend limit must differ. The
+default target is 5000. Older Mem0 OSS builds may reject list requests above
+1000, so the sidecar retries with
+`MEM0_OSS_BACKEND_LIST_RETRY_LIMIT` and returns `degraded_fetch_limit: true`.
+When the fetched backend window is full, responses include `truncated: true` and
+`complete: false`; consolidation tools should not treat that listing as complete.
 
 Codex should connect to this bridge, not directly to Mem0 OSS:
 
@@ -93,6 +107,9 @@ printf '%s\n' "$MEM0_OSS_MCP_TOKEN" | \
 generated local marketplace, adds a small Mem0 OSS compatibility layer, and
 merges the official Codex hook entries into `~/.codex/hooks.json`. Official
 hook and skill files stay in the submodule, not vendored into this repository.
+The generated full plugin also replaces the upstream `/mem0:dream` skill with
+an OSS routine-maintenance variant that checks listing completeness and records
+maintenance run markers.
 To upgrade them:
 
 ```bash

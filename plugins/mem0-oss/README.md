@@ -54,7 +54,9 @@ printf '%s\n' "$MEM0_OSS_MCP_TOKEN" | \
 `third_party/mem0/integrations/mem0-plugin` into the generated local marketplace,
 adds a small Mem0 OSS compatibility layer, and merges hook commands into
 `~/.codex/hooks.json`. The repository does not vendor official hook files; to
-upgrade them, update the submodule commit and rerun the installer.
+upgrade them, update the submodule commit and rerun the installer. The generated
+full plugin also replaces upstream `/mem0:dream` with an OSS routine-maintenance
+variant that refuses incomplete listings and records maintenance run markers.
 
 To use a custom token variable or plugin id:
 

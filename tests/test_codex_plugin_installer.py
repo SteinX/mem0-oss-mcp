@@ -109,6 +109,9 @@ def make_upstream_fixture(root: Path) -> Path:
     onboard = plugin_root / "skills" / "onboard"
     onboard.mkdir(parents=True, exist_ok=True)
     (onboard / "SKILL.md").write_text("---\nname: onboard\n---\n# Hosted onboard\n", encoding="utf-8")
+    dream = plugin_root / "skills" / "dream"
+    dream.mkdir(parents=True, exist_ok=True)
+    (dream / "SKILL.md").write_text("---\nname: dream\n---\n# Hosted dream\n", encoding="utf-8")
     return root
 
 
@@ -457,6 +460,10 @@ def test_installer_generates_full_experience_from_upstream_fixture(tmp_path: Pat
         plugin_root / "scripts" / "auto_setup_categories.py"
     ).read_text()
     assert "Mem0 OSS Onboarding" in (plugin_root / "skills" / "onboard" / "SKILL.md").read_text()
+    dream_skill = (plugin_root / "skills" / "dream" / "SKILL.md").read_text()
+    assert "Mem0 OSS Dream - Routine Memory Maintenance" in dream_skill
+    assert "maintenance_run" in dream_skill
+    assert "Dream paused. Memory listing is incomplete" in dream_skill
     assert (plugin_root / "skills" / "mem0-oss" / "SKILL.md").is_file()
 
     manifest = json.loads((plugin_root / ".codex-plugin" / "plugin.json").read_text())
