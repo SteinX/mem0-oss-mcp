@@ -464,6 +464,10 @@ def test_installer_generates_full_experience_from_upstream_fixture(tmp_path: Pat
     assert "Mem0 OSS Dream - Routine Memory Maintenance" in dream_skill
     assert "maintenance_run" in dream_skill
     assert "Dream paused. Memory listing is incomplete" in dream_skill
+    assert "If creation or verification fails, keep both source memories" in dream_skill
+    assert dream_skill.index("call `add_memory` with:") < dream_skill.index(
+        "Only after replacement verification succeeds"
+    )
     assert (plugin_root / "skills" / "mem0-oss" / "SKILL.md").is_file()
 
     manifest = json.loads((plugin_root / ".codex-plugin" / "plugin.json").read_text())

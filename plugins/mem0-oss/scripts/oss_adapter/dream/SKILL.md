@@ -166,15 +166,21 @@ In `--auto` mode:
 
 Apply in this order:
 
-1. For each merge, call `delete_memory(id=<id1>)`, `delete_memory(id=<id2>)`,
-   then `add_memory` with:
+1. For each merge, call `add_memory` with:
    - `text="<merged content>"`
    - `user_id="<active_user_id>"`
    - `app_id="<active_project_id>"`
    - `metadata={"type": "<type>", "branch": "<active_branch>", "confidence": <max confidence>, "source": "mem0-dream", "merged_from": ["<id1>", "<id2>"]}`
    - `infer=False`
-2. For each resolved contradiction, call `delete_memory(id=<loser_id>)`.
-3. For each prune, call `delete_memory(id=<memory_id>)`.
+2. Read the returned `event_id`, call `get_event_status(event_id=<event_id>)`,
+   and require `status="SUCCEEDED"` with a non-empty `memory_id`. Retrieve that
+   replacement with `get_memory(id=<memory_id>)` and verify its merged content
+   and project scope. If creation or verification fails, keep both source memories
+   and report the failed merge for a later run.
+3. Only after replacement verification succeeds, call
+   `delete_memory(id=<id1>)` and `delete_memory(id=<id2>)`.
+4. For each resolved contradiction, call `delete_memory(id=<loser_id>)`.
+5. For each prune, call `delete_memory(id=<memory_id>)`.
 
 ## Step 7: Store Run Marker
 
