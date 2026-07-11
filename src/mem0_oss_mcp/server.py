@@ -53,6 +53,7 @@ class Config:
 
 
 EVENTS: dict[str, JSON] = {}
+_LIST_LIMIT_SUPPORT: dict[tuple[str, object], bool] = {}
 
 
 def _json_default(value: Any) -> str:
@@ -276,6 +277,24 @@ def _list_fetch_limit() -> tuple[int, int]:
     return requested, requested
 
 
+def _backend_honors_list_limit(query: JSON) -> bool:
+    cache_key = (Config.base_url, _backend)
+    if cache_key in _LIST_LIMIT_SUPPORT:
+        return _LIST_LIMIT_SUPPORT[cache_key]
+
+    probe_query = dict(query)
+    probe_query["top_k"] = 1
+    try:
+        probe_result = _backend("GET", "/memories", query=probe_query)
+    except BackendError:
+        return False
+
+    probe_items = probe_result.get("results", probe_result if isinstance(probe_result, list) else [])
+    supported = isinstance(probe_items, list) and len(probe_items) <= 1
+    _LIST_LIMIT_SUPPORT[cache_key] = supported
+    return supported
+
+
 def add_memory(args: JSON) -> JSON:
     text = args.get("text") or args.get("content")
     messages = args.get("messages")
@@ -380,19 +399,28 @@ def get_memories(args: JSON) -> JSON:
     if not isinstance(items, list):
         items = []
     filtered = [m for m in items if (include_expired or not _is_expired(m)) and _matches(m, values)]
-    truncated = fetch_limit > 0 and len(items) >= fetch_limit
+    backend_list_limit_verified = True
+    if fetch_limit > 0 and 1 < len(items) < fetch_limit:
+        backend_list_limit_verified = _backend_honors_list_limit(query)
+    truncated = fetch_limit > 0 and (len(items) >= fetch_limit or not backend_list_limit_verified)
     extra: JSON = {
         "fetch_limit": fetch_limit,
         "requested_fetch_limit": requested_fetch_limit,
+        "backend_list_limit_verified": backend_list_limit_verified,
         "truncated": truncated,
         "complete": not truncated,
     }
+    warnings = []
     if degraded_fetch_limit:
         extra["degraded_fetch_limit"] = True
-        extra["warning"] = (
+        warnings.append(
             f"Backend rejected requested list fetch limit {requested_fetch_limit}; "
             f"retried with {fetch_limit}."
         )
+    if not backend_list_limit_verified:
+        warnings.append("Backend did not honor top_k=1; listing completeness cannot be verified.")
+    if warnings:
+        extra["warning"] = " ".join(warnings)
     return _paged(filtered, args, extra)
 
 

@@ -180,20 +180,21 @@ class MappingTests(unittest.TestCase):
         self.assertFalse(server._matches(memory, {"app_id": "other"}))
 
     def test_get_memories_fetches_large_backend_page_before_local_app_filter(self):
-        captured = {}
+        calls = []
         original_backend = server._backend
         original_limit = server.Config.list_fetch_limit
         original_backend_limit = server.Config.backend_list_fetch_limit
 
         def fake_backend(method, path, body=None, query=None):
-            captured.update({"method": method, "path": path, "body": body, "query": query})
+            calls.append({"method": method, "path": path, "body": body, "query": query})
             if query.get("top_k"):
+                memories = [
+                    {"id": "other", "user_id": "u1", "metadata": {"app_id": "other"}},
+                    {"id": "repo-1", "user_id": "u1", "metadata": {"app_id": "repo"}},
+                    {"id": "repo-2", "user_id": "u1", "metadata": {"app_id": "repo"}},
+                ]
                 return {
-                    "results": [
-                        {"id": "other", "user_id": "u1", "metadata": {"app_id": "other"}},
-                        {"id": "repo-1", "user_id": "u1", "metadata": {"app_id": "repo"}},
-                        {"id": "repo-2", "user_id": "u1", "metadata": {"app_id": "repo"}},
-                    ]
+                    "results": memories[: query["top_k"]]
                 }
             return {
                 "results": [
@@ -216,7 +217,11 @@ class MappingTests(unittest.TestCase):
             server.Config.list_fetch_limit = original_limit
             server.Config.backend_list_fetch_limit = original_backend_limit
 
-        self.assertEqual(captured["query"], {"user_id": "u1", "agent_id": None, "run_id": None, "top_k": 5000})
+        self.assertEqual(
+            calls[0]["query"],
+            {"user_id": "u1", "agent_id": None, "run_id": None, "top_k": 5000},
+        )
+        self.assertEqual(calls[1]["query"]["top_k"], 1)
         self.assertEqual(result["count"], 2)
         self.assertEqual([memory["id"] for memory in result["results"]], ["repo-1"])
         self.assertEqual(result["fetch_limit"], 5000)
@@ -244,6 +249,37 @@ class MappingTests(unittest.TestCase):
             server.Config.backend_list_fetch_limit = original_backend_limit
 
         self.assertEqual(captured["query"]["top_k"], 2500)
+
+    def test_get_memories_marks_listing_incomplete_when_backend_ignores_top_k(self):
+        calls = []
+        original_backend = server._backend
+        original_limit = server.Config.list_fetch_limit
+        original_backend_limit = server.Config.backend_list_fetch_limit
+
+        def fake_backend(method, path, body=None, query=None):
+            calls.append(query["top_k"])
+            return {
+                "results": [
+                    {"id": f"repo-{index}", "user_id": "u1", "metadata": {"app_id": "repo"}}
+                    for index in range(20)
+                ]
+            }
+
+        server._backend = fake_backend
+        server.Config.list_fetch_limit = 5000
+        server.Config.backend_list_fetch_limit = 5000
+        try:
+            result = server.get_memories({"user_id": "u1", "app_id": "repo"})
+        finally:
+            server._backend = original_backend
+            server.Config.list_fetch_limit = original_limit
+            server.Config.backend_list_fetch_limit = original_backend_limit
+
+        self.assertEqual(calls, [5000, 1])
+        self.assertFalse(result["backend_list_limit_verified"])
+        self.assertTrue(result["truncated"])
+        self.assertFalse(result["complete"])
+        self.assertIn("did not honor top_k=1", result["warning"])
 
     def test_get_memories_retries_lower_limit_when_backend_rejects_configured_limit(self):
         calls = []
