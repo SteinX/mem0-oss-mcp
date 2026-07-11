@@ -2,6 +2,7 @@ import json
 import pathlib
 import sys
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
 
@@ -9,6 +10,16 @@ from mem0_oss_mcp import server
 
 
 class MappingTests(unittest.TestCase):
+    def test_backend_fetch_limit_defaults_to_list_fetch_limit(self):
+        with patch.dict(server.os.environ, {}, clear=True):
+            self.assertEqual(server._read_backend_list_fetch_limit(7500), 7500)
+
+        with patch.dict(server.os.environ, {"MEM0_OSS_BACKEND_LIST_FETCH_LIMIT": "2500"}, clear=True):
+            self.assertEqual(server._read_backend_list_fetch_limit(7500), 2500)
+
+        with patch.dict(server.os.environ, {"MEM0_OSS_MEMORIES_TOP_K_LIMIT": "3000"}, clear=True):
+            self.assertEqual(server._read_backend_list_fetch_limit(7500), 3000)
+
     def test_normalize_filters_flattens_metadata(self):
         filters = {
             "AND": [
@@ -169,19 +180,21 @@ class MappingTests(unittest.TestCase):
         self.assertFalse(server._matches(memory, {"app_id": "other"}))
 
     def test_get_memories_fetches_large_backend_page_before_local_app_filter(self):
-        captured = {}
+        calls = []
         original_backend = server._backend
         original_limit = server.Config.list_fetch_limit
+        original_backend_limit = server.Config.backend_list_fetch_limit
 
         def fake_backend(method, path, body=None, query=None):
-            captured.update({"method": method, "path": path, "body": body, "query": query})
+            calls.append({"method": method, "path": path, "body": body, "query": query})
             if query.get("top_k"):
+                memories = [
+                    {"id": "other", "user_id": "u1", "metadata": {"app_id": "other"}},
+                    {"id": "repo-1", "user_id": "u1", "metadata": {"app_id": "repo"}},
+                    {"id": "repo-2", "user_id": "u1", "metadata": {"app_id": "repo"}},
+                ]
                 return {
-                    "results": [
-                        {"id": "other", "user_id": "u1", "metadata": {"app_id": "other"}},
-                        {"id": "repo-1", "user_id": "u1", "metadata": {"app_id": "repo"}},
-                        {"id": "repo-2", "user_id": "u1", "metadata": {"app_id": "repo"}},
-                    ]
+                    "results": memories[: query["top_k"]]
                 }
             return {
                 "results": [
@@ -190,7 +203,8 @@ class MappingTests(unittest.TestCase):
             }
 
         server._backend = fake_backend
-        server.Config.list_fetch_limit = 1000
+        server.Config.list_fetch_limit = 5000
+        server.Config.backend_list_fetch_limit = 5000
         try:
             result = server.get_memories(
                 {
@@ -201,29 +215,164 @@ class MappingTests(unittest.TestCase):
         finally:
             server._backend = original_backend
             server.Config.list_fetch_limit = original_limit
+            server.Config.backend_list_fetch_limit = original_backend_limit
 
-        self.assertEqual(captured["query"], {"user_id": "u1", "agent_id": None, "run_id": None, "top_k": 1000})
+        self.assertEqual(
+            calls[0]["query"],
+            {"user_id": "u1", "agent_id": None, "run_id": None, "top_k": 5000},
+        )
+        self.assertEqual(calls[1]["query"]["top_k"], 1)
         self.assertEqual(result["count"], 2)
         self.assertEqual([memory["id"] for memory in result["results"]], ["repo-1"])
+        self.assertEqual(result["fetch_limit"], 5000)
+        self.assertFalse(result["truncated"])
+        self.assertTrue(result["complete"])
 
-    def test_get_memories_caps_backend_fetch_limit_at_oss_route_limit(self):
+    def test_get_memories_honors_configured_backend_fetch_limit(self):
         captured = {}
         original_backend = server._backend
         original_limit = server.Config.list_fetch_limit
+        original_backend_limit = server.Config.backend_list_fetch_limit
 
         def fake_backend(method, path, body=None, query=None):
             captured.update({"method": method, "path": path, "body": body, "query": query})
             return {"results": []}
 
         server._backend = fake_backend
-        server.Config.list_fetch_limit = 5000
+        server.Config.list_fetch_limit = 10000
+        server.Config.backend_list_fetch_limit = 2500
         try:
             server.get_memories({"user_id": "u1"})
         finally:
             server._backend = original_backend
             server.Config.list_fetch_limit = original_limit
+            server.Config.backend_list_fetch_limit = original_backend_limit
 
-        self.assertEqual(captured["query"]["top_k"], 1000)
+        self.assertEqual(captured["query"]["top_k"], 2500)
+
+    def test_get_memories_marks_listing_incomplete_when_backend_ignores_top_k(self):
+        calls = []
+        original_backend = server._backend
+        original_limit = server.Config.list_fetch_limit
+        original_backend_limit = server.Config.backend_list_fetch_limit
+
+        def fake_backend(method, path, body=None, query=None):
+            calls.append(query["top_k"])
+            return {
+                "results": [
+                    {"id": f"repo-{index}", "user_id": "u1", "metadata": {"app_id": "repo"}}
+                    for index in range(20)
+                ]
+            }
+
+        server._backend = fake_backend
+        server.Config.list_fetch_limit = 5000
+        server.Config.backend_list_fetch_limit = 5000
+        try:
+            result = server.get_memories({"user_id": "u1", "app_id": "repo"})
+        finally:
+            server._backend = original_backend
+            server.Config.list_fetch_limit = original_limit
+            server.Config.backend_list_fetch_limit = original_backend_limit
+
+        self.assertEqual(calls, [5000, 1])
+        self.assertFalse(result["backend_list_limit_verified"])
+        self.assertTrue(result["truncated"])
+        self.assertFalse(result["complete"])
+        self.assertIn("did not honor top_k=1", result["warning"])
+
+    def test_get_memories_marks_silent_legacy_cap_incomplete(self):
+        calls = []
+        original_backend = server._backend
+        original_limit = server.Config.list_fetch_limit
+        original_backend_limit = server.Config.backend_list_fetch_limit
+        original_retry_limit = server.Config.backend_list_retry_limit
+
+        def fake_backend(method, path, body=None, query=None):
+            calls.append(query["top_k"])
+            limit = 1 if query["top_k"] == 1 else 1000
+            return {
+                "results": [
+                    {"id": f"repo-{index}", "user_id": "u1", "metadata": {"app_id": "repo"}}
+                    for index in range(limit)
+                ]
+            }
+
+        server._backend = fake_backend
+        server.Config.list_fetch_limit = 5000
+        server.Config.backend_list_fetch_limit = 5000
+        server.Config.backend_list_retry_limit = 1000
+        try:
+            result = server.get_memories({"user_id": "u1", "app_id": "repo"})
+        finally:
+            server._backend = original_backend
+            server.Config.list_fetch_limit = original_limit
+            server.Config.backend_list_fetch_limit = original_backend_limit
+            server.Config.backend_list_retry_limit = original_retry_limit
+
+        self.assertEqual(calls, [5000, 1])
+        self.assertTrue(result["backend_list_limit_verified"])
+        self.assertTrue(result["suspected_backend_cap"])
+        self.assertTrue(result["truncated"])
+        self.assertFalse(result["complete"])
+        self.assertIn("matched configured legacy cap 1000", result["warning"])
+
+    def test_get_memories_retries_lower_limit_when_backend_rejects_configured_limit(self):
+        calls = []
+        original_backend = server._backend
+        original_limit = server.Config.list_fetch_limit
+        original_backend_limit = server.Config.backend_list_fetch_limit
+        original_retry_limit = server.Config.backend_list_retry_limit
+
+        def fake_backend(method, path, body=None, query=None):
+            calls.append(query["top_k"])
+            if query["top_k"] == 5000:
+                raise server.BackendError(422, "top_k must be less than or equal to 1000")
+            return {"results": [{"id": "repo-1", "user_id": "u1", "metadata": {"app_id": "repo"}}]}
+
+        server._backend = fake_backend
+        server.Config.list_fetch_limit = 5000
+        server.Config.backend_list_fetch_limit = 5000
+        server.Config.backend_list_retry_limit = 1000
+        try:
+            result = server.get_memories({"user_id": "u1", "app_id": "repo"})
+        finally:
+            server._backend = original_backend
+            server.Config.list_fetch_limit = original_limit
+            server.Config.backend_list_fetch_limit = original_backend_limit
+            server.Config.backend_list_retry_limit = original_retry_limit
+
+        self.assertEqual(calls, [5000, 1000])
+        self.assertEqual(result["fetch_limit"], 1000)
+        self.assertTrue(result["degraded_fetch_limit"])
+        self.assertIn("retried with 1000", result["warning"])
+
+    def test_get_memories_marks_listing_incomplete_when_fetch_window_is_full(self):
+        original_backend = server._backend
+        original_limit = server.Config.list_fetch_limit
+        original_backend_limit = server.Config.backend_list_fetch_limit
+
+        def fake_backend(method, path, body=None, query=None):
+            return {
+                "results": [
+                    {"id": f"repo-{index}", "user_id": "u1", "metadata": {"app_id": "repo"}}
+                    for index in range(query["top_k"])
+                ]
+            }
+
+        server._backend = fake_backend
+        server.Config.list_fetch_limit = 3
+        server.Config.backend_list_fetch_limit = 3
+        try:
+            result = server.get_memories({"user_id": "u1", "app_id": "repo", "page_size": 2})
+        finally:
+            server._backend = original_backend
+            server.Config.list_fetch_limit = original_limit
+            server.Config.backend_list_fetch_limit = original_backend_limit
+
+        self.assertEqual(result["count"], 3)
+        self.assertTrue(result["truncated"])
+        self.assertFalse(result["complete"])
 
     def test_tools_list_contains_official_names(self):
         names = {tool["name"] for tool in server.tool_schema()}

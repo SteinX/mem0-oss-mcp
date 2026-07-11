@@ -17,7 +17,18 @@ from . import __version__
 
 
 JSON = dict[str, Any]
-OSS_MEMORIES_TOP_K_LIMIT = 1000
+DEFAULT_LIST_FETCH_LIMIT = 5000
+DEFAULT_BACKEND_LIST_RETRY_LIMIT = 1000
+
+
+def _read_backend_list_fetch_limit(list_fetch_limit: int) -> int:
+    raw = os.environ.get("MEM0_OSS_BACKEND_LIST_FETCH_LIMIT")
+    if raw is not None:
+        return int(raw)
+    raw = os.environ.get("MEM0_OSS_MEMORIES_TOP_K_LIMIT")
+    if raw is not None:
+        return int(raw)
+    return list_fetch_limit
 
 
 class BackendError(RuntimeError):
@@ -36,10 +47,13 @@ class Config:
     timeout = float(os.environ.get("MEM0_OSS_TIMEOUT", "30"))
     default_user_id = os.environ.get("MEM0_OSS_DEFAULT_USER_ID", os.environ.get("USER", "codex"))
     default_app_id = os.environ.get("MEM0_OSS_DEFAULT_APP_ID", "default")
-    list_fetch_limit = int(os.environ.get("MEM0_OSS_LIST_FETCH_LIMIT", "1000"))
+    list_fetch_limit = int(os.environ.get("MEM0_OSS_LIST_FETCH_LIMIT", str(DEFAULT_LIST_FETCH_LIMIT)))
+    backend_list_fetch_limit = _read_backend_list_fetch_limit(list_fetch_limit)
+    backend_list_retry_limit = int(os.environ.get("MEM0_OSS_BACKEND_LIST_RETRY_LIMIT", str(DEFAULT_BACKEND_LIST_RETRY_LIMIT)))
 
 
 EVENTS: dict[str, JSON] = {}
+_LIST_LIMIT_SUPPORT: dict[tuple[str, object], bool] = {}
 
 
 def _json_default(value: Any) -> str:
@@ -243,11 +257,42 @@ def _matches(memory: JSON, values: JSON) -> bool:
     return True
 
 
-def _paged(items: list[Any], args: JSON) -> JSON:
+def _paged(items: list[Any], args: JSON, extra: JSON | None = None) -> JSON:
     page = int(args.get("page") or 1)
     size = int(args.get("page_size") or args.get("pageSize") or len(items) or 100)
     start = max(page - 1, 0) * size
-    return {"results": items[start : start + size], "count": len(items), "page": page, "page_size": size}
+    response = {"results": items[start : start + size], "count": len(items), "page": page, "page_size": size}
+    if extra:
+        response.update(extra)
+    return response
+
+
+def _list_fetch_limit() -> tuple[int, int]:
+    requested = int(Config.list_fetch_limit)
+    backend_limit = int(Config.backend_list_fetch_limit)
+    if requested <= 0:
+        return 0, requested
+    if backend_limit > 0:
+        return min(requested, backend_limit), requested
+    return requested, requested
+
+
+def _backend_honors_list_limit(query: JSON) -> bool:
+    cache_key = (Config.base_url, _backend)
+    if cache_key in _LIST_LIMIT_SUPPORT:
+        return _LIST_LIMIT_SUPPORT[cache_key]
+
+    probe_query = dict(query)
+    probe_query["top_k"] = 1
+    try:
+        probe_result = _backend("GET", "/memories", query=probe_query)
+    except BackendError:
+        return False
+
+    probe_items = probe_result.get("results", probe_result if isinstance(probe_result, list) else [])
+    supported = isinstance(probe_items, list) and len(probe_items) <= 1
+    _LIST_LIMIT_SUPPORT[cache_key] = supported
+    return supported
 
 
 def add_memory(args: JSON) -> JSON:
@@ -333,16 +378,59 @@ def get_memories(args: JSON) -> JSON:
             values[key] = args[key]
 
     query = {k: values.get(k) for k in ("user_id", "agent_id", "run_id")}
-    if Config.list_fetch_limit > 0:
-        query["top_k"] = min(Config.list_fetch_limit, OSS_MEMORIES_TOP_K_LIMIT)
+    fetch_limit, requested_fetch_limit = _list_fetch_limit()
+    if fetch_limit > 0:
+        query["top_k"] = fetch_limit
     if include_expired:
         query["show_expired"] = True
-    result = _backend("GET", "/memories", query=query)
+    degraded_fetch_limit = False
+    retry_limit = int(Config.backend_list_retry_limit)
+    try:
+        result = _backend("GET", "/memories", query=query)
+    except BackendError as exc:
+        if exc.status in {400, 422} and fetch_limit > retry_limit > 0:
+            query["top_k"] = retry_limit
+            fetch_limit = retry_limit
+            degraded_fetch_limit = True
+            result = _backend("GET", "/memories", query=query)
+        else:
+            raise
     items = result.get("results", result if isinstance(result, list) else [])
     if not isinstance(items, list):
         items = []
     filtered = [m for m in items if (include_expired or not _is_expired(m)) and _matches(m, values)]
-    return _paged(filtered, args)
+    backend_list_limit_verified = True
+    if fetch_limit > 0 and 1 < len(items) < fetch_limit:
+        backend_list_limit_verified = _backend_honors_list_limit(query)
+    suspected_backend_cap = fetch_limit > retry_limit > 0 and len(items) == retry_limit
+    truncated = fetch_limit > 0 and (
+        len(items) >= fetch_limit or not backend_list_limit_verified or suspected_backend_cap
+    )
+    extra: JSON = {
+        "fetch_limit": fetch_limit,
+        "requested_fetch_limit": requested_fetch_limit,
+        "backend_list_limit_verified": backend_list_limit_verified,
+        "suspected_backend_cap": suspected_backend_cap,
+        "truncated": truncated,
+        "complete": not truncated,
+    }
+    warnings = []
+    if degraded_fetch_limit:
+        extra["degraded_fetch_limit"] = True
+        warnings.append(
+            f"Backend rejected requested list fetch limit {requested_fetch_limit}; "
+            f"retried with {fetch_limit}."
+        )
+    if not backend_list_limit_verified:
+        warnings.append("Backend did not honor top_k=1; listing completeness cannot be verified.")
+    if suspected_backend_cap:
+        warnings.append(
+            f"Backend returned {len(items)} rows, which matched configured legacy cap {retry_limit}; "
+            "listing completeness cannot be verified."
+        )
+    if warnings:
+        extra["warning"] = " ".join(warnings)
+    return _paged(filtered, args, extra)
 
 
 def get_memory(args: JSON) -> Any:
