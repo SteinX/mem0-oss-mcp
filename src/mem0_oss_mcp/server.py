@@ -384,10 +384,10 @@ def get_memories(args: JSON) -> JSON:
     if include_expired:
         query["show_expired"] = True
     degraded_fetch_limit = False
+    retry_limit = int(Config.backend_list_retry_limit)
     try:
         result = _backend("GET", "/memories", query=query)
     except BackendError as exc:
-        retry_limit = int(Config.backend_list_retry_limit)
         if exc.status in {400, 422} and fetch_limit > retry_limit > 0:
             query["top_k"] = retry_limit
             fetch_limit = retry_limit
@@ -402,11 +402,15 @@ def get_memories(args: JSON) -> JSON:
     backend_list_limit_verified = True
     if fetch_limit > 0 and 1 < len(items) < fetch_limit:
         backend_list_limit_verified = _backend_honors_list_limit(query)
-    truncated = fetch_limit > 0 and (len(items) >= fetch_limit or not backend_list_limit_verified)
+    suspected_backend_cap = fetch_limit > retry_limit > 0 and len(items) == retry_limit
+    truncated = fetch_limit > 0 and (
+        len(items) >= fetch_limit or not backend_list_limit_verified or suspected_backend_cap
+    )
     extra: JSON = {
         "fetch_limit": fetch_limit,
         "requested_fetch_limit": requested_fetch_limit,
         "backend_list_limit_verified": backend_list_limit_verified,
+        "suspected_backend_cap": suspected_backend_cap,
         "truncated": truncated,
         "complete": not truncated,
     }
@@ -419,6 +423,11 @@ def get_memories(args: JSON) -> JSON:
         )
     if not backend_list_limit_verified:
         warnings.append("Backend did not honor top_k=1; listing completeness cannot be verified.")
+    if suspected_backend_cap:
+        warnings.append(
+            f"Backend returned {len(items)} rows, which matched configured legacy cap {retry_limit}; "
+            "listing completeness cannot be verified."
+        )
     if warnings:
         extra["warning"] = " ".join(warnings)
     return _paged(filtered, args, extra)

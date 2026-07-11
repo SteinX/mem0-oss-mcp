@@ -281,6 +281,42 @@ class MappingTests(unittest.TestCase):
         self.assertFalse(result["complete"])
         self.assertIn("did not honor top_k=1", result["warning"])
 
+    def test_get_memories_marks_silent_legacy_cap_incomplete(self):
+        calls = []
+        original_backend = server._backend
+        original_limit = server.Config.list_fetch_limit
+        original_backend_limit = server.Config.backend_list_fetch_limit
+        original_retry_limit = server.Config.backend_list_retry_limit
+
+        def fake_backend(method, path, body=None, query=None):
+            calls.append(query["top_k"])
+            limit = 1 if query["top_k"] == 1 else 1000
+            return {
+                "results": [
+                    {"id": f"repo-{index}", "user_id": "u1", "metadata": {"app_id": "repo"}}
+                    for index in range(limit)
+                ]
+            }
+
+        server._backend = fake_backend
+        server.Config.list_fetch_limit = 5000
+        server.Config.backend_list_fetch_limit = 5000
+        server.Config.backend_list_retry_limit = 1000
+        try:
+            result = server.get_memories({"user_id": "u1", "app_id": "repo"})
+        finally:
+            server._backend = original_backend
+            server.Config.list_fetch_limit = original_limit
+            server.Config.backend_list_fetch_limit = original_backend_limit
+            server.Config.backend_list_retry_limit = original_retry_limit
+
+        self.assertEqual(calls, [5000, 1])
+        self.assertTrue(result["backend_list_limit_verified"])
+        self.assertTrue(result["suspected_backend_cap"])
+        self.assertTrue(result["truncated"])
+        self.assertFalse(result["complete"])
+        self.assertIn("matched configured legacy cap 1000", result["warning"])
+
     def test_get_memories_retries_lower_limit_when_backend_rejects_configured_limit(self):
         calls = []
         original_backend = server._backend
