@@ -461,8 +461,12 @@ def test_installer_generates_full_experience_from_upstream_fixture(tmp_path: Pat
     ).read_text()
     assert "Mem0 OSS Onboarding" in (plugin_root / "skills" / "onboard" / "SKILL.md").read_text()
     dream_skill = (plugin_root / "skills" / "dream" / "SKILL.md").read_text()
-    assert "Mem0 OSS Dream - Routine Memory Maintenance" in dream_skill
-    assert "maintenance_run" in dream_skill
+    assert "Mem0 OSS Dream - Manual Memory Maintenance" in dream_skill
+    assert "Manual trigger only" in dream_skill
+    assert "explicitly invokes `/mem0:dream`" in dream_skill
+    assert "--auto" not in dream_skill
+    assert "maintenance_run" not in dream_skill
+    assert "regular memory hygiene" not in dream_skill
     assert "Dream paused. Memory listing is incomplete" in dream_skill
     assert "If creation or verification fails, keep both source memories" in dream_skill
     assert dream_skill.index("call `add_memory` with:") < dream_skill.index(

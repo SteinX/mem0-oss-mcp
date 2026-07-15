@@ -55,8 +55,8 @@ printf '%s\n' "$MEM0_OSS_MCP_TOKEN" | \
 adds a small Mem0 OSS compatibility layer, and merges hook commands into
 `~/.codex/hooks.json`. The repository does not vendor official hook files; to
 upgrade them, update the submodule commit and rerun the installer. The generated
-full plugin also replaces upstream `/mem0:dream` with an OSS routine-maintenance
-variant that refuses incomplete listings and records maintenance run markers.
+full plugin also replaces upstream `/mem0:dream` with an OSS manual-trigger
+variant that refuses incomplete listings and requires confirmation before changes.
 
 To use a custom token variable or plugin id:
 
