@@ -108,8 +108,8 @@ generated local marketplace, adds a small Mem0 OSS compatibility layer, and
 merges the official Codex hook entries into `~/.codex/hooks.json`. Official
 hook and skill files stay in the submodule, not vendored into this repository.
 The generated full plugin also replaces the upstream `/mem0:dream` skill with
-an OSS routine-maintenance variant that checks listing completeness and records
-maintenance run markers.
+an OSS manual-trigger variant that checks listing completeness and requires
+confirmation before applying changes.
 To upgrade them:
 
 ```bash
