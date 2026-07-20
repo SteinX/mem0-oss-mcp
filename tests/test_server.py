@@ -10,6 +10,279 @@ from mem0_oss_mcp import server
 
 
 class MappingTests(unittest.TestCase):
+    def test_sidecar_add_preserves_project_and_app_scope(self):
+        calls = []
+
+        def fake_sidecar(method, path, body=None, query=None):
+            calls.append({"method": method, "path": path, "body": body, "query": query})
+            return {"memory": {"id": "mem-sidecar"}}
+
+        with (
+            patch.object(server.Config, "sidecar_base_url", "http://sidecar.internal"),
+            patch.object(server.Config, "sidecar_project_id", "mem0-project"),
+            patch.object(server, "_sidecar_backend", side_effect=fake_sidecar),
+            patch.object(server, "_backend", side_effect=AssertionError("direct OSS write")),
+        ):
+            result = server.add_memory(
+                {
+                    "text": "remember through sidecar",
+                    "user_id": "root",
+                    "app_id": "source-app",
+                    "metadata": {"type": "decision"},
+                }
+            )
+
+        self.assertEqual(result["status"], "SUCCEEDED")
+        self.assertEqual(calls[0]["method"], "POST")
+        self.assertEqual(calls[0]["path"], "/v3/memories/add")
+        self.assertEqual(calls[0]["body"]["project_id"], "mem0-project")
+        self.assertEqual(calls[0]["body"]["app_id"], "source-app")
+        self.assertEqual(calls[0]["body"]["user_id"], "root")
+
+    def test_sidecar_search_and_item_mutations_use_scoped_routes(self):
+        calls = []
+
+        def fake_sidecar(method, path, body=None, query=None):
+            calls.append((method, path, body, query))
+            if path == "/v3/memories/search":
+                return {"results": []}
+            if method == "PATCH":
+                return {"memory": {"id": "memory/one", "memory": "after"}}
+            return {"id": "memory/one"}
+
+        with (
+            patch.object(server.Config, "sidecar_base_url", "http://sidecar.internal"),
+            patch.object(server.Config, "sidecar_project_id", "mem0-project"),
+            patch.object(server, "_sidecar_backend", side_effect=fake_sidecar),
+            patch.object(server, "_backend", side_effect=AssertionError("direct OSS call")),
+        ):
+            server.search_memories(
+                {"query": "q", "user_id": "root", "app_id": "source-app"}
+            )
+            server.get_memory({"id": "memory/one"})
+            server.update_memory(
+                {"id": "memory/one", "text": "after", "metadata": {"type": "note"}}
+            )
+            server.delete_memory({"id": "memory/one"})
+
+        self.assertEqual(calls[0][0:2], ("POST", "/v3/memories/search"))
+        self.assertEqual(calls[0][2]["project_id"], "mem0-project")
+        self.assertEqual(calls[0][2]["app_id"], "source-app")
+        self.assertEqual(
+            calls[1],
+            (
+                "GET",
+                "/v1/memories/memory%2Fone",
+                None,
+                {"project_id": "mem0-project", "project_wide": True},
+            ),
+        )
+        self.assertEqual(calls[2][0], "PATCH")
+        self.assertEqual(calls[2][1], "/v1/memories/memory%2Fone")
+        self.assertEqual(calls[2][2], {"text": "after", "metadata": {"type": "note"}})
+        self.assertEqual(calls[3][0:2], ("DELETE", "/v1/memories/memory%2Fone"))
+
+    def test_sidecar_search_uses_app_from_platform_filters(self):
+        captured = {}
+
+        def fake_sidecar(method, path, body=None, query=None):
+            captured.update({"method": method, "path": path, "body": body})
+            return {"results": []}
+
+        with (
+            patch.object(server.Config, "sidecar_base_url", "http://sidecar.internal"),
+            patch.object(server, "_sidecar_backend", side_effect=fake_sidecar),
+        ):
+            server.search_memories(
+                {
+                    "query": "q",
+                    "filters": {"AND": [{"user_id": "root"}, {"app_id": "repo"}]},
+                }
+            )
+
+        self.assertEqual(captured["body"]["app_id"], "repo")
+
+    def test_sidecar_search_unwraps_eq_app_filter_for_scope(self):
+        captured = {}
+
+        def fake_sidecar(method, path, body=None, query=None):
+            captured.update({"method": method, "path": path, "body": body})
+            return {"results": []}
+
+        with (
+            patch.object(server.Config, "sidecar_base_url", "http://sidecar.internal"),
+            patch.object(server, "_sidecar_backend", side_effect=fake_sidecar),
+        ):
+            server.search_memories(
+                {"query": "q", "filters": {"app_id": {"eq": "repo"}}}
+            )
+
+        self.assertEqual(captured["body"]["app_id"], "repo")
+        self.assertEqual(captured["body"]["filters"], {"app_id": "repo"})
+
+    def test_sidecar_search_rejects_ambiguous_app_filter_scope(self):
+        ambiguous_filters = (
+            {"app_id": {"in": ["app-a", "app-b"]}},
+            {"OR": [{"app_id": "app-a"}, {"app_id": "app-b"}]},
+        )
+
+        with patch.object(
+            server.Config,
+            "sidecar_base_url",
+            "http://sidecar.internal",
+        ):
+            for filters in ambiguous_filters:
+                with self.subTest(filters=filters):
+                    with self.assertRaisesRegex(
+                        ValueError,
+                        "single app_id scope",
+                    ):
+                        server.search_memories({"query": "q", "filters": filters})
+
+    def test_sidecar_text_only_update_does_not_erase_metadata(self):
+        captured = {}
+
+        def fake_sidecar(method, path, body=None, query=None):
+            captured.update({"method": method, "path": path, "body": body})
+            return {"memory": {"id": "mem-1", "memory": "after"}}
+
+        with (
+            patch.object(server.Config, "sidecar_base_url", "http://sidecar.internal"),
+            patch.object(server, "_sidecar_backend", side_effect=fake_sidecar),
+        ):
+            server.update_memory({"id": "mem-1", "text": "after"})
+
+        self.assertEqual(captured["method"], "PATCH")
+        self.assertEqual(captured["body"], {"text": "after"})
+
+    def test_direct_text_only_update_preserves_legacy_metadata_null(self):
+        captured = {}
+
+        def fake_backend(method, path, body=None, query=None):
+            captured.update({"method": method, "path": path, "body": body})
+            return {"id": "mem-1"}
+
+        with (
+            patch.object(server.Config, "sidecar_base_url", ""),
+            patch.object(server, "_backend", side_effect=fake_backend),
+        ):
+            server.update_memory({"id": "mem-1", "text": "after"})
+
+        self.assertEqual(captured["method"], "PUT")
+        self.assertEqual(captured["body"], {"text": "after", "metadata": None})
+
+    def test_sidecar_list_uses_explorer_query_with_concrete_app_filter(self):
+        captured = {}
+
+        def fake_sidecar(method, path, body=None, query=None):
+            captured.update(
+                {"method": method, "path": path, "body": body, "query": query}
+            )
+            return {
+                "results": [
+                    {
+                        "id": "mem-1",
+                        "user_id": "root",
+                        "app_id": "source-app",
+                        "metadata": {},
+                    }
+                ],
+                "total": 1,
+                "has_more": False,
+            }
+
+        with (
+            patch.object(server.Config, "sidecar_base_url", "http://sidecar.internal"),
+            patch.object(server.Config, "sidecar_project_id", "mem0-project"),
+            patch.object(server, "_sidecar_backend", side_effect=fake_sidecar),
+        ):
+            result = server.get_memories(
+                {"user_id": "root", "app_id": "source-app", "page_size": 20}
+            )
+
+        self.assertEqual(captured["method"], "POST")
+        self.assertEqual(captured["path"], "/v1/memories/query")
+        self.assertEqual(captured["body"]["project_id"], "mem0-project")
+        self.assertEqual(captured["body"]["app_id"], "source-app")
+        self.assertEqual(
+            captured["body"]["filters"],
+            [
+                {"field": "user_id", "operator": "equals", "value": "root"},
+                {
+                    "field": "app_id",
+                    "operator": "equals",
+                    "value": "source-app",
+                },
+            ],
+        )
+        self.assertEqual(result["count"], 1)
+        self.assertTrue(result["complete"])
+
+    def test_sidecar_list_marks_client_filtered_expired_rows_incomplete(self):
+        def fake_sidecar(method, path, body=None, query=None):
+            return {
+                "results": [
+                    {
+                        "id": "expired",
+                        "user_id": "root",
+                        "app_id": "source-app",
+                        "metadata": {"expiration_date": "2000-01-01"},
+                    },
+                    {
+                        "id": "current",
+                        "user_id": "root",
+                        "app_id": "source-app",
+                        "metadata": {},
+                    },
+                ],
+                "total": 2,
+                "has_more": False,
+            }
+
+        with (
+            patch.object(server.Config, "sidecar_base_url", "http://sidecar.internal"),
+            patch.object(server, "_sidecar_backend", side_effect=fake_sidecar),
+        ):
+            result = server.get_memories(
+                {"user_id": "root", "app_id": "source-app"}
+            )
+
+        self.assertEqual([memory["id"] for memory in result["results"]], ["current"])
+        self.assertEqual(result["count"], 1)
+        self.assertFalse(result["complete"])
+        self.assertTrue(result["truncated"])
+
+    def test_sidecar_bulk_delete_pages_through_scoped_item_deletes(self):
+        list_calls = []
+        deleted = []
+
+        def fake_get_memories(args):
+            list_calls.append(dict(args))
+            if len(list_calls) == 1:
+                return {"results": [{"id": "mem-1"}, {"id": "mem-2"}]}
+            return {"results": []}
+
+        def fake_delete_memory(args):
+            deleted.append(args["id"])
+            return {"deleted": True}
+
+        with (
+            patch.object(server.Config, "sidecar_base_url", "http://sidecar.internal"),
+            patch.object(server, "get_memories", side_effect=fake_get_memories),
+            patch.object(server, "delete_memory", side_effect=fake_delete_memory),
+            patch.object(server, "_backend", side_effect=AssertionError("direct OSS delete")),
+        ):
+            result = server.delete_all_memories(
+                {"user_id": "root", "app_id": "source-app"}
+            )
+
+        self.assertEqual(deleted, ["mem-1", "mem-2"])
+        self.assertEqual(result["deleted_ids"], deleted)
+        self.assertEqual(len(list_calls), 2)
+        self.assertEqual(list_calls[0]["page"], 1)
+        self.assertEqual(list_calls[0]["page_size"], 100)
+        self.assertTrue(list_calls[0]["include_expired"])
+
     def test_backend_fetch_limit_defaults_to_list_fetch_limit(self):
         with patch.dict(server.os.environ, {}, clear=True):
             self.assertEqual(server._read_backend_list_fetch_limit(7500), 7500)

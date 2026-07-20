@@ -10,7 +10,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
 from . import __version__
@@ -50,6 +50,9 @@ class Config:
     list_fetch_limit = int(os.environ.get("MEM0_OSS_LIST_FETCH_LIMIT", str(DEFAULT_LIST_FETCH_LIMIT)))
     backend_list_fetch_limit = _read_backend_list_fetch_limit(list_fetch_limit)
     backend_list_retry_limit = int(os.environ.get("MEM0_OSS_BACKEND_LIST_RETRY_LIMIT", str(DEFAULT_BACKEND_LIST_RETRY_LIMIT)))
+    sidecar_base_url = os.environ.get("MEM0_SIDECAR_BASE_URL", "").rstrip("/")
+    sidecar_project_id = os.environ.get("MEM0_SIDECAR_PROJECT_ID", "default")
+    sidecar_api_key = os.environ.get("MEM0_SIDECAR_API_KEY", "")
 
 
 EVENTS: dict[str, JSON] = {}
@@ -89,6 +92,47 @@ def _backend(method: str, path: str, body: JSON | None = None, query: JSON | Non
         raise BackendError(502, str(exc.reason)) from exc
 
 
+def _sidecar_backend(
+    method: str,
+    path: str,
+    body: JSON | None = None,
+    query: JSON | None = None,
+) -> Any:
+    if not Config.sidecar_base_url:
+        raise BackendError(500, "MEM0_SIDECAR_BASE_URL is not set")
+
+    url = f"{Config.sidecar_base_url}{path}"
+    if query:
+        clean = {key: value for key, value in query.items() if value is not None}
+        if clean:
+            url += "?" + urlencode(clean, doseq=True)
+
+    data = None
+    headers = {"Accept": "application/json"}
+    if Config.sidecar_api_key:
+        headers["X-API-Key"] = Config.sidecar_api_key
+    if body is not None:
+        data = json.dumps(body).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+
+    request = Request(url, data=data, headers=headers, method=method)
+    try:
+        with urlopen(request, timeout=Config.timeout) as response:
+            raw = response.read().decode("utf-8")
+            return json.loads(raw) if raw else {}
+    except HTTPError as exc:
+        raise BackendError(
+            exc.code,
+            exc.read().decode("utf-8") or exc.reason,
+        ) from exc
+    except URLError as exc:
+        raise BackendError(502, str(exc.reason)) from exc
+
+
+def _uses_sidecar() -> bool:
+    return bool(Config.sidecar_base_url)
+
+
 def _first(mapping: JSON, *keys: str) -> Any:
     for key in keys:
         value = mapping.get(key)
@@ -114,7 +158,10 @@ def _filter_values(filters: Any) -> JSON:
                 for meta_key, meta_value in value.items():
                     values.setdefault(meta_key, meta_value)
             elif key in {"user_id", "agent_id", "run_id", "app_id", "type"}:
-                values.setdefault(key, value)
+                if isinstance(value, dict) and set(value) == {"eq"}:
+                    values.setdefault(key, value["eq"])
+                else:
+                    values.setdefault(key, value)
             elif isinstance(value, dict) and "eq" in value:
                 values.setdefault(key, value["eq"])
 
@@ -164,6 +211,42 @@ def _merge_flat_filters(items: list[Any]) -> JSON | None:
                 return None
             merged[key] = value
     return merged
+
+
+def _sidecar_search_app_id(args: JSON, filters: Any) -> str:
+    explicit_app_id = args.get("app_id")
+    if explicit_app_id is not None:
+        if not isinstance(explicit_app_id, str) or not explicit_app_id:
+            raise ValueError("sidecar search requires a single app_id scope")
+        return explicit_app_id
+
+    candidates: list[Any] = []
+
+    def collect(value: Any) -> None:
+        if isinstance(value, list):
+            for item in value:
+                collect(item)
+            return
+        if not isinstance(value, dict):
+            return
+        for key, child in value.items():
+            if key == "app_id":
+                if isinstance(child, dict) and set(child) == {"eq"}:
+                    candidates.append(child["eq"])
+                else:
+                    candidates.append(child)
+            else:
+                collect(child)
+
+    collect(filters)
+    if not candidates:
+        return Config.default_app_id
+    if any(not isinstance(value, str) or not value for value in candidates):
+        raise ValueError("sidecar search requires a single app_id scope")
+    unique = set(candidates)
+    if len(unique) != 1:
+        raise ValueError("sidecar search requires a single app_id scope")
+    return next(iter(unique))
 
 
 def _memory_metadata(memory: JSON) -> JSON:
@@ -321,7 +404,18 @@ def add_memory(args: JSON) -> JSON:
         if key in args and args[key] is not None:
             body[key] = args[key]
 
-    result = _backend("POST", "/memories", body)
+    if _uses_sidecar():
+        result = _sidecar_backend(
+            "POST",
+            "/v3/memories/add",
+            {
+                **body,
+                "project_id": Config.sidecar_project_id,
+                "app_id": app_id,
+            },
+        )
+    else:
+        result = _backend("POST", "/memories", body)
     event_id = str(uuid.uuid4())
     event = {
         "event_id": event_id,
@@ -343,6 +437,9 @@ def _extract_memory_id(result: Any) -> str | None:
             first = rows[0]
             if isinstance(first, dict):
                 return str(first.get("id") or "") or None
+        nested_memory = result.get("memory")
+        if isinstance(nested_memory, dict):
+            return _extract_memory_id(nested_memory)
     return None
 
 
@@ -365,7 +462,20 @@ def search_memories(args: JSON) -> Any:
         if args.get(key) is not None:
             body["filters"].setdefault(key, args[key])
 
-    result = _without_expired(_backend("POST", "/search", body))
+    if _uses_sidecar():
+        app_id = _sidecar_search_app_id(args, body["filters"])
+        result = _sidecar_backend(
+            "POST",
+            "/v3/memories/search",
+            {
+                **body,
+                "project_id": Config.sidecar_project_id,
+                "app_id": app_id,
+            },
+        )
+    else:
+        result = _backend("POST", "/search", body)
+    result = _without_expired(result)
     return _limit_result_count(result, requested_top_k)
 
 
@@ -376,6 +486,73 @@ def get_memories(args: JSON) -> JSON:
     for key in ("user_id", "agent_id", "run_id", "app_id"):
         if args.get(key) is not None:
             values[key] = args[key]
+
+    if _uses_sidecar():
+        filters = []
+        for field_name in ("user_id", "agent_id", "app_id", "run_id"):
+            expected = values.get(field_name)
+            if expected in (None, "*"):
+                continue
+            if isinstance(expected, dict) and isinstance(expected.get("in"), list):
+                filters.append(
+                    {
+                        "field": field_name,
+                        "operator": "in",
+                        "value": expected["in"],
+                    }
+                )
+            elif isinstance(expected, str):
+                filters.append(
+                    {
+                        "field": field_name,
+                        "operator": "equals",
+                        "value": expected,
+                    }
+                )
+        expected_type = values.get("type")
+        if isinstance(expected_type, str) and expected_type != "*":
+            filters.append(
+                {
+                    "field": "metadata",
+                    "operator": "contains",
+                    "value": {"key": "type", "value": expected_type},
+                }
+            )
+        requested_app_id = values.get("app_id")
+        body: JSON = {
+            "project_id": Config.sidecar_project_id,
+            "filters": filters,
+            "page": int(args.get("page") or 1),
+            "page_size": min(int(args.get("page_size") or 100), 100),
+            "sort": "created_at_desc",
+        }
+        if isinstance(requested_app_id, str) and requested_app_id != "*":
+            body["app_id"] = requested_app_id
+        else:
+            body["project_wide"] = True
+        result = _sidecar_backend("POST", "/v1/memories/query", body)
+        items = result.get("results") if isinstance(result, dict) else []
+        if not isinstance(items, list):
+            items = []
+        visible = [
+            memory
+            for memory in items
+            if (include_expired or not _is_expired(memory))
+            and _matches(memory, values)
+        ]
+        filtered_out = len(items) - len(visible)
+        has_more = bool(result.get("has_more"))
+        return {
+            **result,
+            "results": visible,
+            "count": (
+                len(visible)
+                if filtered_out
+                else int(result.get("total", len(visible)))
+            ),
+            "complete": not has_more and not filtered_out,
+            "truncated": has_more or bool(filtered_out),
+        }
 
     query = {k: values.get(k) for k in ("user_id", "agent_id", "run_id")}
     fetch_limit, requested_fetch_limit = _list_fetch_limit()
@@ -437,6 +614,15 @@ def get_memory(args: JSON) -> Any:
     memory_id = args.get("id") or args.get("memory_id")
     if not memory_id:
         raise ValueError("get_memory requires id")
+    if _uses_sidecar():
+        return _sidecar_backend(
+            "GET",
+            f"/v1/memories/{quote(str(memory_id), safe='')}",
+            query={
+                "project_id": Config.sidecar_project_id,
+                "project_wide": True,
+            },
+        )
     return _backend("GET", f"/memories/{memory_id}")
 
 
@@ -445,23 +631,100 @@ def update_memory(args: JSON) -> Any:
     text = args.get("text") or args.get("memory_content")
     if not memory_id or text is None:
         raise ValueError("update_memory requires id and text")
-    return _backend("PUT", f"/memories/{memory_id}", {"text": text, "metadata": args.get("metadata")})
+    if _uses_sidecar():
+        patch = {"text": text}
+        if "metadata" in args:
+            patch["metadata"] = args["metadata"]
+        return _sidecar_backend(
+            "PATCH",
+            f"/v1/memories/{quote(str(memory_id), safe='')}",
+            patch,
+            query={
+                "project_id": Config.sidecar_project_id,
+                "project_wide": True,
+            },
+        )
+    return _backend(
+        "PUT",
+        f"/memories/{memory_id}",
+        {"text": text, "metadata": args.get("metadata")},
+    )
 
 
 def delete_memory(args: JSON) -> Any:
     memory_id = args.get("id") or args.get("memory_id")
     if not memory_id:
         raise ValueError("delete_memory requires id")
+    if _uses_sidecar():
+        return _sidecar_backend(
+            "DELETE",
+            f"/v1/memories/{quote(str(memory_id), safe='')}",
+            query={
+                "project_id": Config.sidecar_project_id,
+                "project_wide": True,
+            },
+        )
     return _backend("DELETE", f"/memories/{memory_id}")
 
 
 def delete_all_memories(args: JSON) -> Any:
-    app_id = args.get("app_id")
+    scope = {
+        key: args[key]
+        for key in ("user_id", "agent_id", "run_id", "app_id")
+        if args.get(key)
+    }
+    if not scope:
+        raise ValueError("delete_all_memories requires user_id, agent_id, run_id, or app_id")
+
+    if _uses_sidecar():
+        if scope.get("app_id") and not any(
+            scope.get(key) for key in ("user_id", "agent_id", "run_id")
+        ):
+            scope["user_id"] = Config.default_user_id
+
+        deleted = []
+        seen = set()
+        while True:
+            page = get_memories(
+                {
+                    **scope,
+                    "page": 1,
+                    "page_size": 100,
+                    "include_expired": True,
+                }
+            )
+            memories = page.get("results", [])
+            memory_ids = [
+                str(memory["id"])
+                for memory in memories
+                if isinstance(memory, dict) and memory.get("id")
+            ]
+            if not memory_ids:
+                break
+            repeated = [memory_id for memory_id in memory_ids if memory_id in seen]
+            if repeated:
+                raise BackendError(
+                    409,
+                    "Sidecar bulk delete made no progress; repeated memory IDs: "
+                    + ", ".join(repeated[:5]),
+                )
+            for memory_id in memory_ids:
+                delete_memory({"id": memory_id})
+                seen.add(memory_id)
+                deleted.append(memory_id)
+        return {"message": f"Deleted {len(deleted)} memories", "deleted_ids": deleted}
+
+    app_id = scope.get("app_id")
     if app_id:
-        user_id = args.get("user_id") or Config.default_user_id
-        memories = get_memories({"user_id": user_id, "app_id": app_id, "page_size": 1000, "include_expired": True})[
-            "results"
-        ]
+        user_id = scope.get("user_id") or Config.default_user_id
+        memories = get_memories(
+            {
+                "user_id": user_id,
+                "app_id": app_id,
+                "page_size": 1000,
+                "include_expired": True,
+            }
+        )["results"]
         deleted = []
         for memory in memories:
             if memory.get("id"):
@@ -469,9 +732,7 @@ def delete_all_memories(args: JSON) -> Any:
                 deleted.append(memory["id"])
         return {"message": f"Deleted {len(deleted)} memories", "deleted_ids": deleted}
 
-    query = {k: args.get(k) for k in ("user_id", "agent_id", "run_id") if args.get(k)}
-    if not query:
-        raise ValueError("delete_all_memories requires user_id, agent_id, run_id, or app_id")
+    query = {key: scope[key] for key in ("user_id", "agent_id", "run_id") if key in scope}
     return _backend("DELETE", "/memories", query=query)
 
 
@@ -598,7 +859,10 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         if self.path == "/health":
             try:
-                _backend("GET", "/configure")
+                if _uses_sidecar():
+                    _sidecar_backend("GET", "/readyz")
+                else:
+                    _backend("GET", "/configure")
                 self._send_json({"status": "ok"})
             except Exception as exc:
                 self._send_json({"status": "error", "error": str(exc)}, HTTPStatus.BAD_GATEWAY)
