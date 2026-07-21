@@ -140,7 +140,7 @@ def iter_hook_commands(config: dict):
 def update_plugin_manifest(plugin_root: Path, plugin_name: str, display_name: str) -> None:
     manifest_path = plugin_root / ".codex-plugin" / "plugin.json"
     manifest = load_json(manifest_path)
-    base_version = str(manifest.get("version", "0.1.0")).split("+", 1)[0]
+    base_version = str(manifest.get("version", "0.1.1")).split("+", 1)[0]
     cachebuster = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
 
     manifest["name"] = plugin_name

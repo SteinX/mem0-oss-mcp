@@ -11,6 +11,12 @@ self-hosted Mem0 REST API.
 MEM0_OSS_BASE_URL=http://<mem0-host>:<mem0-port>
 MEM0_OSS_API_KEY=m0sk_xxx
 
+# Recommended: route memory operations through the control-plane sidecar.
+MEM0_SIDECAR_BASE_URL=http://mem0-platform-sidecar:8765
+MEM0_SIDECAR_PROJECT_ID=default
+# Optional when the sidecar itself requires an API key.
+# MEM0_SIDECAR_API_KEY=m0sk_xxx
+
 MEM0_OSS_MCP_HOST=0.0.0.0
 MEM0_OSS_MCP_PORT=8080
 MEM0_OSS_MCP_TOKEN=change-me
@@ -25,6 +31,14 @@ MEM0_OSS_BACKEND_LIST_RETRY_LIMIT=1000
 
 `MEM0_OSS_BASE_URL` is the base URL of your Mem0 OSS REST server. The port is
 not assumed.
+
+When `MEM0_SIDECAR_BASE_URL` is set, memory add/search/list/get/update/delete
+operations use the sidecar so its durable project/app index stays current.
+`MEM0_SIDECAR_PROJECT_ID` supplies the project boundary, while each tool call's
+concrete `app_id` remains intact. If the sidecar setting is absent, the bridge
+keeps the legacy direct-OSS behavior. A sidecar request failure is returned to
+the caller and is never retried as a direct write, avoiding accidental
+double-writes.
 
 `get_memories` fetches a larger backend candidate window before applying local
 `app_id` and metadata filters. `MEM0_OSS_LIST_FETCH_LIMIT` is the sidecar target

@@ -163,7 +163,7 @@ def test_installer_generates_local_marketplace(tmp_path: Path) -> None:
     manifest = json.loads((plugin_root / ".codex-plugin" / "plugin.json").read_text())
     assert manifest["name"] == "mem0-example"
     assert manifest["interface"]["displayName"] == "Mem0 Example"
-    assert manifest["version"].startswith("0.1.0+codex.")
+    assert manifest["version"].startswith("0.1.1+codex.")
 
     mcp = json.loads((plugin_root / ".mcp.json").read_text())
     assert "mcp_servers" not in mcp
