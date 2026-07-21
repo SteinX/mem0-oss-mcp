@@ -1,6 +1,6 @@
 {
   "name": "mem0-oss",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Connect Codex to any self-hosted Mem0 OSS MCP bridge.",
   "author": {
     "name": "SteinX",

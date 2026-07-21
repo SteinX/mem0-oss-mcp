@@ -203,7 +203,7 @@ def write_oss_adapter(source_root: Path, plugin_root: Path) -> None:
 def update_package_json(plugin_root: Path, plugin_name: str, display_name: str) -> None:
     package_path = plugin_root / "package.json"
     package = load_json(package_path)
-    base_version = str(package.get("version", "0.1.0")).split("+", 1)[0]
+    base_version = str(package.get("version", "0.1.1")).split("+", 1)[0]
     cachebuster = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
 
     package["name"] = f"@mem0-oss/{plugin_name}-opencode-plugin"
