@@ -14,6 +14,10 @@ MEM0_OSS_API_KEY=m0sk_xxx
 # Recommended: route memory operations through the control-plane sidecar.
 MEM0_SIDECAR_BASE_URL=http://mem0-platform-sidecar:8765
 MEM0_SIDECAR_PROJECT_ID=default
+MEM0_SIDECAR_REQUIRED=true
+# Optional; defaults to a per-process ID and a five-minute heartbeat.
+# MEM0_SIDECAR_INSTANCE_ID=mem0-oss-mcp-1
+# MEM0_SIDECAR_HEARTBEAT_INTERVAL_SECONDS=300
 # Optional when the sidecar itself requires an API key.
 # MEM0_SIDECAR_API_KEY=m0sk_xxx
 
@@ -39,6 +43,12 @@ concrete `app_id` remains intact. If the sidecar setting is absent, the bridge
 keeps the legacy direct-OSS behavior. A sidecar request failure is returned to
 the caller and is never retried as a direct write, avoiding accidental
 double-writes.
+
+With sidecar routing enabled, the bridge reports a bounded read/write routing
+capability heartbeat at startup and every five minutes. Server-side
+`AUTO_SAFE` consolidation requires a current heartbeat. Set
+`MEM0_SIDECAR_REQUIRED=true` in production so a missing sidecar URL fails at
+startup instead of silently selecting legacy direct mode.
 
 `get_memories` fetches a larger backend candidate window before applying local
 `app_id` and metadata filters. `MEM0_OSS_LIST_FETCH_LIMIT` is the sidecar target

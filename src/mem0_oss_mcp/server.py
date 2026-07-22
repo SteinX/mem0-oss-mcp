@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 import time
 import uuid
 from datetime import date, datetime, timezone
@@ -53,6 +54,18 @@ class Config:
     sidecar_base_url = os.environ.get("MEM0_SIDECAR_BASE_URL", "").rstrip("/")
     sidecar_project_id = os.environ.get("MEM0_SIDECAR_PROJECT_ID", "default")
     sidecar_api_key = os.environ.get("MEM0_SIDECAR_API_KEY", "")
+    sidecar_required = os.environ.get("MEM0_SIDECAR_REQUIRED", "false").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    sidecar_instance_id = os.environ.get(
+        "MEM0_SIDECAR_INSTANCE_ID", f"mem0-oss-mcp-{uuid.uuid4()}"
+    )
+    sidecar_heartbeat_interval_seconds = float(
+        os.environ.get("MEM0_SIDECAR_HEARTBEAT_INTERVAL_SECONDS", "300")
+    )
 
 
 EVENTS: dict[str, JSON] = {}
@@ -131,6 +144,34 @@ def _sidecar_backend(
 
 def _uses_sidecar() -> bool:
     return bool(Config.sidecar_base_url)
+
+
+def _send_sidecar_heartbeat() -> Any:
+    return _sidecar_backend(
+        "POST",
+        (
+            f"/v1/projects/{quote(Config.sidecar_project_id, safe='')}"
+            "/capabilities/bridge-routing/heartbeat"
+        ),
+        {
+            "instance_id": Config.sidecar_instance_id,
+            "bridge_version": __version__,
+            "routes_reads": True,
+            "routes_writes": True,
+        },
+    )
+
+
+def _heartbeat_loop(stop: threading.Event) -> None:
+    while not stop.is_set():
+        try:
+            _send_sidecar_heartbeat()
+        except Exception as exc:
+            print(
+                f"sidecar capability heartbeat failed: {type(exc).__name__}",
+                file=sys.stderr,
+            )
+        stop.wait(max(Config.sidecar_heartbeat_interval_seconds, 30.0))
 
 
 def _first(mapping: JSON, *keys: str) -> Any:
@@ -912,9 +953,26 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
+    if Config.sidecar_required and not _uses_sidecar():
+        raise SystemExit("MEM0_SIDECAR_REQUIRED=true requires MEM0_SIDECAR_BASE_URL")
     httpd = ThreadingHTTPServer((Config.host, Config.port), Handler)
+    heartbeat_stop = threading.Event()
+    heartbeat_thread = None
+    if _uses_sidecar():
+        heartbeat_thread = threading.Thread(
+            target=_heartbeat_loop,
+            args=(heartbeat_stop,),
+            name="mem0-sidecar-heartbeat",
+            daemon=True,
+        )
+        heartbeat_thread.start()
     print(f"mem0-oss-mcp listening on {Config.host}:{Config.port}", file=sys.stderr)
-    httpd.serve_forever()
+    try:
+        httpd.serve_forever()
+    finally:
+        heartbeat_stop.set()
+        if heartbeat_thread is not None:
+            heartbeat_thread.join(timeout=1.0)
 
 
 if __name__ == "__main__":

@@ -10,6 +10,39 @@ from mem0_oss_mcp import server
 
 
 class MappingTests(unittest.TestCase):
+    def test_sidecar_capability_heartbeat_reports_read_write_routing(self):
+        calls = []
+
+        def fake_sidecar(method, path, body=None, query=None):
+            calls.append((method, path, body, query))
+            return {"ready": True}
+
+        with (
+            patch.object(server.Config, "sidecar_base_url", "http://sidecar.internal"),
+            patch.object(server.Config, "sidecar_project_id", "mem0-project"),
+            patch.object(server.Config, "sidecar_instance_id", "bridge-a"),
+            patch.object(server, "_sidecar_backend", side_effect=fake_sidecar),
+        ):
+            result = server._send_sidecar_heartbeat()
+
+        self.assertEqual(result, {"ready": True})
+        self.assertEqual(
+            calls,
+            [
+                (
+                    "POST",
+                    "/v1/projects/mem0-project/capabilities/bridge-routing/heartbeat",
+                    {
+                        "instance_id": "bridge-a",
+                        "bridge_version": server.__version__,
+                        "routes_reads": True,
+                        "routes_writes": True,
+                    },
+                    None,
+                )
+            ],
+        )
+
     def test_sidecar_add_preserves_project_and_app_scope(self):
         calls = []
 
