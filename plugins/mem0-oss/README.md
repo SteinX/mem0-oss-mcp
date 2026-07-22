@@ -96,3 +96,11 @@ installer builds it and writes a small loader into
 values passed with `--token-stdin` or `--token` are stored in a local private
 dotenv file under `~/.mem0-oss-mcp/opencode-plugins/env/`, not in generated
 TypeScript source.
+
+The generated plugin defaults to `--auto-capture-mode explicit`, so periodic
+message capture is disabled and explicit memory tools remain the write path.
+Use `bounded` for every-tenth-message sampling with duplicate and volume limits,
+or `legacy` to restore upstream every-third-message capture. Client-side Dream
+is disabled by default; pass `--client-dream` only when it is intentionally
+required. Runtime `MEM0_OSS_AUTO_CAPTURE_MODE` and `MEM0_DREAM` values override
+these generated defaults.

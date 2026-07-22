@@ -178,6 +178,20 @@ plugins from that directory at startup. The generated plugin keeps the upstream
 OpenCode hooks, native tools, and skills, while its memory client forwards
 operations to `mem0-oss-mcp` through JSON-RPC `tools/call`.
 
+Generated plugins default to explicit capture: periodic message capture is off,
+and memories are written through the plugin's explicit memory tools. The
+upstream client-side Dream workflow is also off because durable consolidation
+belongs on the server. These defaults can be changed deliberately:
+
+- `--auto-capture-mode bounded` samples every tenth message, with normalized
+  duplicate suppression and per-session/per-day limits.
+- `--auto-capture-mode legacy` restores the upstream every-third-message
+  behavior.
+- `--client-dream` re-enables the upstream client-side Dream workflow.
+
+Existing `MEM0_OSS_AUTO_CAPTURE_MODE` and `MEM0_DREAM` environment values take
+precedence over installer defaults.
+
 Token values passed with `--token-stdin` or `--token` are written to a local
 private dotenv file under `~/.mem0-oss-mcp/opencode-plugins/env/`; they are not
 written to generated TypeScript source. Pass `--env-file` when you want to
