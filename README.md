@@ -40,8 +40,8 @@ Clients configure only the public MCP URL and bearer token. `MEM0_SIDECAR_*`
 variables are private bridge/operator settings and must not be copied into
 Codex, OpenCode, Cursor, Claude, Hermes, or other client configuration.
 
-When `MEM0_SIDECAR_BASE_URL` is set, memory add/search/list/get/update/delete
-operations use the sidecar so its durable project/app index stays current.
+When `MEM0_SIDECAR_BASE_URL` is set, all memory operations plus entity
+list/delete use the sidecar so its durable project/app index stays current.
 `MEM0_SIDECAR_PROJECT_ID` supplies the project boundary, while each tool call's
 concrete `app_id` remains intact. If the sidecar setting is absent, the bridge
 keeps the legacy direct-OSS behavior. A sidecar request failure is returned to
