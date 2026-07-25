@@ -48,7 +48,7 @@ UPSTREAM_AUTO_CAPTURE_BLOCK = """    if (msgCount % 3 === 0) {
 """
 
 POLICY_CONTROLLED_AUTO_CAPTURE_BLOCK = """    const captureTime = new Date();
-    const captureDecision = capturePolicy.shouldCapture({
+    const captureDecision = capturePolicy.claimCapture({
       messageCount: msgCount,
       text: safeText,
       explicitRemember: hasRemember,
@@ -71,7 +71,6 @@ POLICY_CONTROLLED_AUTO_CAPTURE_BLOCK = """    const captureTime = new Date();
             infer: true,
           } as any);
           stats.adds++;
-          capturePolicy.recordCapture(captureText, captureTime);
         } catch {
         }
       });

@@ -778,17 +778,70 @@ def delete_all_memories(args: JSON) -> Any:
 
 
 def list_entities(args: JSON) -> Any:
+    if _uses_sidecar():
+        entities = []
+        for entity_type in ("user", "agent", "run"):
+            page = 1
+            while True:
+                result = _sidecar_backend(
+                    "POST",
+                    "/v1/entities/query",
+                    {
+                        "project_id": Config.sidecar_project_id,
+                        "app_id": Config.default_app_id,
+                        "entity_type": entity_type,
+                        "page": page,
+                        "page_size": 100,
+                    },
+                )
+                rows = result.get("results", []) if isinstance(result, dict) else []
+                for row in rows:
+                    if not isinstance(row, dict) or not row.get("entity_id"):
+                        continue
+                    entities.append(
+                        {
+                            "id": str(row["entity_id"]),
+                            "type": entity_type,
+                            "total_memories": int(row.get("memory_count") or 0),
+                            "created_at": None,
+                            "updated_at": row.get("updated_at") or row.get("last_seen_at"),
+                        }
+                    )
+                total = int(result.get("total") or 0) if isinstance(result, dict) else 0
+                if not rows or page * 100 >= total:
+                    break
+                page += 1
+        return sorted(entities, key=lambda entity: (entity["type"], entity["id"]))
     return _backend("GET", "/entities")
 
 
 def delete_entities(args: JSON) -> Any:
     pairs = (("user", args.get("user_id")), ("agent", args.get("agent_id")), ("run", args.get("run_id")))
+    if _uses_sidecar():
+        app_id = args.get("app_id") or Config.default_app_id
+        return {
+            "results": [
+                _sidecar_backend(
+                    "DELETE",
+                    (
+                        f"/v1/entities/{quote(entity_type, safe='')}/"
+                        f"{quote(str(entity_id), safe='')}"
+                    ),
+                    query={
+                        "project_id": Config.sidecar_project_id,
+                        "app_id": app_id,
+                    },
+                )
+                for entity_type, entity_id in pairs
+                if entity_id
+            ]
+        }
+    if args.get("app_id"):
+        raise ValueError("delete_entities(app_id) is not supported by mem0 OSS server; use delete_all_memories with user_id and app_id")
     deleted = []
     for entity_type, entity_id in pairs:
         if entity_id:
             deleted.append(_backend("DELETE", f"/entities/{entity_type}/{entity_id}"))
-    if args.get("app_id"):
-        raise ValueError("delete_entities(app_id) is not supported by mem0 OSS server; use delete_all_memories with user_id and app_id")
     return {"results": deleted}
 
 

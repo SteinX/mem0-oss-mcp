@@ -1,10 +1,13 @@
 import {createHash} from "node:crypto";
 import {
+  closeSync,
   chmodSync,
   existsSync,
   mkdirSync,
+  openSync,
   readFileSync,
   renameSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import {join} from "node:path";
@@ -37,6 +40,7 @@ interface CaptureState {
 }
 
 const STATE_FILE = "opencode-capture-state.json";
+const LOCK_FILE = "opencode-capture-state.lock";
 const MAX_INPUT_CHARS = 2_000;
 const SESSION_LIMIT = 3;
 const DAILY_LIMIT = 20;
@@ -118,7 +122,7 @@ export class CapturePolicy {
     }
   }
 
-  shouldCapture(candidate: CaptureCandidate): CaptureDecision {
+  claimCapture(candidate: CaptureCandidate): CaptureDecision {
     const {messageCount, text, explicitRemember, now} = candidate;
 
     if (explicitRemember) {
@@ -144,29 +148,61 @@ export class CapturePolicy {
       return {capture: false, reason: "interval"};
     }
 
-    const app = this.appState(now);
-    if ((app.sessions[this.sessionId] ?? 0) >= SESSION_LIMIT) {
-      return {capture: false, reason: "session_limit"};
-    }
-    if (app.dailyCount >= DAILY_LIMIT) {
-      return {capture: false, reason: "daily_limit"};
-    }
-    if (app.recentHashes.includes(normalizedHash(text))) {
-      return {capture: false, reason: "duplicate"};
+    mkdirSync(this.stateDir, {recursive: true, mode: 0o700});
+    chmodSync(this.stateDir, 0o700);
+    const lockPath = join(this.stateDir, LOCK_FILE);
+    let lock: number;
+    try {
+      lock = openSync(lockPath, "wx", 0o600);
+      chmodSync(lockPath, 0o600);
+    } catch {
+      return {capture: false, reason: "state_lock_unavailable"};
     }
 
-    return {capture: true, reason: "eligible", text};
+    try {
+      if (!this.reloadState()) {
+        return {capture: false, reason: "state_invalid"};
+      }
+      const app = this.appState(now);
+      if ((app.sessions[this.sessionId] ?? 0) >= SESSION_LIMIT) {
+        return {capture: false, reason: "session_limit"};
+      }
+      if (app.dailyCount >= DAILY_LIMIT) {
+        return {capture: false, reason: "daily_limit"};
+      }
+      const hash = normalizedHash(text);
+      if (app.recentHashes.includes(hash)) {
+        return {capture: false, reason: "duplicate"};
+      }
+
+      // Claim before the asynchronous MCP write begins. Failed writes may
+      // consume quota, which is safer than reopening an automatic-write race.
+      app.dailyCount += 1;
+      app.sessions[this.sessionId] = (app.sessions[this.sessionId] ?? 0) + 1;
+      app.recentHashes.push(hash);
+      app.recentHashes = app.recentHashes.slice(-RECENT_HASH_LIMIT);
+      this.persist();
+      return {capture: true, reason: "eligible", text};
+    } finally {
+      closeSync(lock);
+      unlinkSync(lockPath);
+    }
   }
 
-  recordCapture(text: string, now: Date): void {
-    if (this.mode !== "bounded") return;
-
-    const app = this.appState(now);
-    app.dailyCount += 1;
-    app.sessions[this.sessionId] = (app.sessions[this.sessionId] ?? 0) + 1;
-    app.recentHashes.push(normalizedHash(text));
-    app.recentHashes = app.recentHashes.slice(-RECENT_HASH_LIMIT);
-    this.persist();
+  private reloadState(): boolean {
+    const statePath = join(this.stateDir, STATE_FILE);
+    if (!existsSync(statePath)) {
+      this.state = emptyState();
+      return true;
+    }
+    try {
+      const state: unknown = JSON.parse(readFileSync(statePath, "utf8"));
+      if (!isCaptureState(state)) return false;
+      this.state = state;
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private appState(now: Date): AppCaptureState {

@@ -157,8 +157,8 @@ def test_opencode_installer_generates_oss_plugin_copy(tmp_path: Path) -> None:
     assert "MEM0_SIDECAR" not in source
     assert "https://mem0.example.test:18443/mcp" in source
     assert "CapturePolicy.fromEnv" in source
-    assert "capturePolicy.shouldCapture" in source
-    assert "capturePolicy.recordCapture" in source
+    assert "capturePolicy.claimCapture" in source
+    assert "capturePolicy.recordCapture" not in source
     assert "if (msgCount % 3 === 0)" not in source
     assert 'content: "hello"' in source
     assert "const apiKey = process.env.MEM0_API_KEY" in source
@@ -385,10 +385,10 @@ import {CapturePolicy} from "__CAPTURE_POLICY_URI__";
 const now = new Date("2026-07-23T12:00:00Z");
 const explicit = CapturePolicy.fromEnv({}, "__EXPLICIT_STATE__", "repo", "session-explicit");
 if (explicit.mode !== "explicit") throw new Error(`default mode was ${explicit.mode}`);
-if (explicit.shouldCapture({messageCount: 10, text: "durable fact", explicitRemember: false, now}).capture) {
+if (explicit.claimCapture({messageCount: 10, text: "durable fact", explicitRemember: false, now}).capture) {
   throw new Error("explicit mode captured a periodic message");
 }
-const remember = explicit.shouldCapture({
+const remember = explicit.claimCapture({
   messageCount: 10,
   text: "remember this durable fact",
   explicitRemember: true,
@@ -404,28 +404,26 @@ const bounded = CapturePolicy.fromEnv(
   "repo",
   "session-bounded",
 );
-if (bounded.shouldCapture({messageCount: 9, text: "first fact", explicitRemember: false, now}).capture) {
+if (bounded.claimCapture({messageCount: 9, text: "first fact", explicitRemember: false, now}).capture) {
   throw new Error("bounded mode captured before message ten");
 }
-const first = bounded.shouldCapture({messageCount: 10, text: "Ｆｉｘ   cache", explicitRemember: false, now});
+const first = bounded.claimCapture({messageCount: 10, text: "Ｆｉｘ   cache", explicitRemember: false, now});
 if (!first.capture || first.text !== "Ｆｉｘ   cache") {
   throw new Error(`bounded mode rejected eligible capture: ${JSON.stringify(first)}`);
 }
-bounded.recordCapture(first.text!, now);
-const duplicate = bounded.shouldCapture({messageCount: 20, text: "Fix cache", explicitRemember: false, now});
+const duplicate = bounded.claimCapture({messageCount: 20, text: "Fix cache", explicitRemember: false, now});
 if (duplicate.capture || duplicate.reason !== "duplicate") {
   throw new Error(`normalized duplicate was not suppressed: ${JSON.stringify(duplicate)}`);
 }
 for (const [messageCount, text] of [[20, "second fact"], [30, "third fact"]] as const) {
-  const result = bounded.shouldCapture({messageCount, text, explicitRemember: false, now});
+  const result = bounded.claimCapture({messageCount, text, explicitRemember: false, now});
   if (!result.capture) throw new Error(`eligible session capture rejected: ${JSON.stringify(result)}`);
-  bounded.recordCapture(text, now);
 }
-const sessionLimit = bounded.shouldCapture({messageCount: 40, text: "fourth fact", explicitRemember: false, now});
+const sessionLimit = bounded.claimCapture({messageCount: 40, text: "fourth fact", explicitRemember: false, now});
 if (sessionLimit.capture || sessionLimit.reason !== "session_limit") {
   throw new Error(`session limit not enforced: ${JSON.stringify(sessionLimit)}`);
 }
-const oversized = bounded.shouldCapture({messageCount: 50, text: "x".repeat(2001), explicitRemember: false, now});
+const oversized = bounded.claimCapture({messageCount: 50, text: "x".repeat(2001), explicitRemember: false, now});
 if (oversized.capture || oversized.reason !== "input_too_large") {
   throw new Error(`oversized input was not rejected: ${JSON.stringify(oversized)}`);
 }
@@ -441,16 +439,15 @@ for (let index = 0; index < 20; index += 1) {
     `daily-session-${index}`,
   );
   const text = `daily fact ${index}`;
-  const result = daily.shouldCapture({messageCount: 10, text, explicitRemember: false, now});
+  const result = daily.claimCapture({messageCount: 10, text, explicitRemember: false, now});
   if (!result.capture) throw new Error(`daily capture ${index} rejected: ${JSON.stringify(result)}`);
-  daily.recordCapture(text, now);
 }
 const dailyBlocked = CapturePolicy.fromEnv(
   {MEM0_OSS_AUTO_CAPTURE_MODE: "bounded"},
   "__DAILY_STATE__",
   "repo",
   "daily-session-overflow",
-).shouldCapture({messageCount: 10, text: "daily overflow", explicitRemember: false, now});
+).claimCapture({messageCount: 10, text: "daily overflow", explicitRemember: false, now});
 if (dailyBlocked.capture || dailyBlocked.reason !== "daily_limit") {
   throw new Error(`daily limit not enforced: ${JSON.stringify(dailyBlocked)}`);
 }
@@ -461,10 +458,10 @@ const legacy = CapturePolicy.fromEnv(
   "repo",
   "legacy-session",
 );
-if (!legacy.shouldCapture({messageCount: 3, text: "legacy fact", explicitRemember: false, now}).capture) {
+if (!legacy.claimCapture({messageCount: 3, text: "legacy fact", explicitRemember: false, now}).capture) {
   throw new Error("legacy mode did not capture message three");
 }
-if (legacy.shouldCapture({messageCount: 4, text: "legacy fact two", explicitRemember: false, now}).capture) {
+if (legacy.claimCapture({messageCount: 4, text: "legacy fact two", explicitRemember: false, now}).capture) {
   throw new Error("legacy mode captured message four");
 }
 
