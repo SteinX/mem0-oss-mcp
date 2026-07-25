@@ -154,6 +154,8 @@ def test_opencode_installer_generates_oss_plugin_copy(tmp_path: Path) -> None:
     assert f'envFile: "{env_file}"' in source
     assert 'autoCaptureMode: "explicit"' in source
     assert "clientDream: false" in source
+    assert "MEM0_SIDECAR" not in source
+    assert "https://mem0.example.test:18443/mcp" in source
     assert "CapturePolicy.fromEnv" in source
     assert "capturePolicy.shouldCapture" in source
     assert "capturePolicy.recordCapture" in source

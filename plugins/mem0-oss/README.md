@@ -10,6 +10,10 @@ MEM0_OSS_MCP_URL=http://<bridge-host>:8080/mcp
 MEM0_OSS_MCP_TOKEN=change-me
 ```
 
+Clients configure only this MCP URL and bearer token. `MEM0_SIDECAR_*`
+variables belong to the bridge operator and must not appear in generated
+Codex, OpenCode, Cursor, Claude, Hermes, or other client configuration.
+
 For Codex Desktop, generate a local plugin instance instead. Pass the bridge
 endpoint and token at install time; the installer writes the token to a local
 private dotenv file, while the generated MCP config stores only the URL,

@@ -210,6 +210,8 @@ def test_installer_uses_stdio_bridge_when_env_file_is_set(tmp_path: Path) -> Non
         "MEM0_OSS_MCP_TOKEN_ENV_VAR": "MEM0_EXAMPLE_TOKEN",
         "MEM0_OSS_ENV_FILE": str(env_file),
     }
+    assert "MEM0_SIDECAR" not in json.dumps(mcp)
+    assert server["env"]["MEM0_OSS_MCP_URL"].endswith("/mcp")
     assert "url" not in server
     assert "bearer_token_env_var" not in server
 
