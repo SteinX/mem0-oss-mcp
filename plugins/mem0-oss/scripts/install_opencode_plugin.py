@@ -25,6 +25,58 @@ DEFAULT_PLUGIN_NAME = "mem0-oss"
 DEFAULT_TOKEN_ENV_VAR = "MEM0_OSS_MCP_TOKEN"
 UPSTREAM_OPENCODE_SUBDIR = "integrations/mem0-plugin/.opencode-plugin"
 
+UPSTREAM_AUTO_CAPTURE_BLOCK = """    if (msgCount % 3 === 0) {
+      Promise.resolve().then(async () => {
+        try {
+          await mem0.add([{role: "user", content: safeText}], {
+            user_id: userId,
+            app_id: appId,
+            metadata: {
+              type: "auto_capture",
+              source: "opencode",
+              confidence: 0.7,
+              session_id: sessionId,
+              branch,
+            },
+            infer: true,
+          } as any);
+          stats.adds++;
+        } catch {
+        }
+      });
+    }
+"""
+
+POLICY_CONTROLLED_AUTO_CAPTURE_BLOCK = """    const captureTime = new Date();
+    const captureDecision = capturePolicy.claimCapture({
+      messageCount: msgCount,
+      text: safeText,
+      explicitRemember: hasRemember,
+      now: captureTime,
+    });
+    const captureText = captureDecision.capture ? captureDecision.text : undefined;
+    if (captureText) {
+      Promise.resolve().then(async () => {
+        try {
+          await mem0.add([{role: "user", content: captureText}], {
+            user_id: userId,
+            app_id: appId,
+            metadata: {
+              type: "auto_capture",
+              source: "opencode",
+              confidence: 0.7,
+              session_id: sessionId,
+              branch,
+            },
+            infer: true,
+          } as any);
+          stats.adds++;
+        } catch {
+        }
+      });
+    }
+"""
+
 
 def normalize_name(value: str) -> str:
     name = re.sub(r"[^a-z0-9]+", "-", value.strip().lower())
@@ -198,12 +250,13 @@ def copy_adapter_file(source: Path, target: Path, executable: bool = False) -> N
 def write_oss_adapter(source_root: Path, plugin_root: Path) -> None:
     adapter_root = source_root / "scripts" / "oss_adapter"
     copy_adapter_file(adapter_root / "mem0_oss_memory_client.ts", plugin_root / "mem0_oss_memory_client.ts")
+    copy_adapter_file(adapter_root / "opencode_capture_policy.ts", plugin_root / "opencode_capture_policy.ts")
 
 
 def update_package_json(plugin_root: Path, plugin_name: str, display_name: str) -> None:
     package_path = plugin_root / "package.json"
     package = load_json(package_path)
-    base_version = str(package.get("version", "0.1.1")).split("+", 1)[0]
+    base_version = str(package.get("version", "0.1.2")).split("+", 1)[0]
     cachebuster = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
 
     package["name"] = f"@mem0-oss/{plugin_name}-opencode-plugin"
@@ -222,7 +275,14 @@ def js_literal(value: str | None) -> str:
     return json.dumps(value)
 
 
-def patch_opencode_source(plugin_root: Path, url: str, token_env_var: str, env_file: Path | None) -> None:
+def patch_opencode_source(
+    plugin_root: Path,
+    url: str,
+    token_env_var: str,
+    env_file: Path | None,
+    auto_capture_mode: str,
+    client_dream: bool,
+) -> None:
     source_path = plugin_root / "opencode-mem0.ts"
     content = source_path.read_text(encoding="utf-8")
     content, import_count = re.subn(
@@ -233,6 +293,12 @@ def patch_opencode_source(plugin_root: Path, url: str, token_env_var: str, env_f
     )
     if import_count != 1:
         raise ValueError("OpenCode plugin source did not contain the expected mem0ai MemoryClient import")
+    content = content.replace(
+        'import {MemoryClient, initializeMem0OssEnv} from "./mem0_oss_memory_client";',
+        'import {MemoryClient, initializeMem0OssEnv} from "./mem0_oss_memory_client";\n'
+        'import {CapturePolicy} from "./opencode_capture_policy";',
+        1,
+    )
 
     anchor = "  const {$, client} = ctx;\n"
     if anchor not in content:
@@ -244,9 +310,25 @@ def patch_opencode_source(plugin_root: Path, url: str, token_env_var: str, env_f
         + f"    url: {js_literal(url)},\n"
         + f"    tokenEnvVar: {js_literal(token_env_var)},\n"
         + f"    envFile: {js_literal(env_file_value)},\n"
+        + f"    autoCaptureMode: {js_literal(auto_capture_mode)},\n"
+        + f"    clientDream: {str(client_dream).lower()},\n"
         + "  });\n"
     )
     content = content.replace(anchor, init, 1)
+
+    state_anchor = '  const mem0StateDir = join(homedir(), ".mem0");\n'
+    if state_anchor not in content:
+        raise ValueError("OpenCode plugin source did not contain the expected mem0 state directory anchor")
+    content = content.replace(
+        state_anchor,
+        state_anchor
+        + "  const capturePolicy = CapturePolicy.fromEnv(process.env, mem0StateDir, appId, sessionId);\n",
+        1,
+    )
+
+    if content.count(UPSTREAM_AUTO_CAPTURE_BLOCK) != 1:
+        raise ValueError("OpenCode plugin source did not contain the expected periodic auto-capture block")
+    content = content.replace(UPSTREAM_AUTO_CAPTURE_BLOCK, POLICY_CONTROLLED_AUTO_CAPTURE_BLOCK, 1)
     source_path.write_text(content, encoding="utf-8")
 
 
@@ -317,6 +399,17 @@ def parse_args() -> argparse.Namespace:
         help="Optional dotenv file read by the generated plugin for the bridge token",
     )
     parser.add_argument(
+        "--auto-capture-mode",
+        choices=("explicit", "bounded", "legacy"),
+        default="explicit",
+        help="OpenCode capture policy, default: explicit (no periodic capture)",
+    )
+    parser.add_argument(
+        "--client-dream",
+        action="store_true",
+        help="Enable the upstream client-side Dream workflow (disabled by default)",
+    )
+    parser.add_argument(
         "--opencode-dir",
         type=Path,
         default=default_opencode_dir(),
@@ -352,7 +445,14 @@ def main() -> int:
     if token is not None:
         assert env_file is not None
         write_token_env_file(env_file, token_env_var, token)
-    patch_opencode_source(target_root, url, token_env_var, env_file)
+    patch_opencode_source(
+        target_root,
+        url,
+        token_env_var,
+        env_file,
+        args.auto_capture_mode,
+        args.client_dream,
+    )
     update_package_json(target_root, plugin_name, display_name)
 
     if not args.no_build:
@@ -366,6 +466,8 @@ def main() -> int:
     print(f"Source: {source_root}")
     print(f"MCP URL: {url}")
     print(f"Token env var: {token_env_var}")
+    print(f"Auto capture: {args.auto_capture_mode}")
+    print(f"Client Dream: {'enabled' if args.client_dream else 'disabled'}")
     if env_file is not None:
         print(f"Env file: {env_file}")
     if args.no_build:

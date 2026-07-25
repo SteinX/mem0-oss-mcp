@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 import time
 import uuid
 from datetime import date, datetime, timezone
@@ -53,6 +54,18 @@ class Config:
     sidecar_base_url = os.environ.get("MEM0_SIDECAR_BASE_URL", "").rstrip("/")
     sidecar_project_id = os.environ.get("MEM0_SIDECAR_PROJECT_ID", "default")
     sidecar_api_key = os.environ.get("MEM0_SIDECAR_API_KEY", "")
+    sidecar_required = os.environ.get("MEM0_SIDECAR_REQUIRED", "false").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    sidecar_instance_id = os.environ.get(
+        "MEM0_SIDECAR_INSTANCE_ID", f"mem0-oss-mcp-{uuid.uuid4()}"
+    )
+    sidecar_heartbeat_interval_seconds = float(
+        os.environ.get("MEM0_SIDECAR_HEARTBEAT_INTERVAL_SECONDS", "300")
+    )
 
 
 EVENTS: dict[str, JSON] = {}
@@ -131,6 +144,34 @@ def _sidecar_backend(
 
 def _uses_sidecar() -> bool:
     return bool(Config.sidecar_base_url)
+
+
+def _send_sidecar_heartbeat() -> Any:
+    return _sidecar_backend(
+        "POST",
+        (
+            f"/v1/projects/{quote(Config.sidecar_project_id, safe='')}"
+            "/capabilities/bridge-routing/heartbeat"
+        ),
+        {
+            "instance_id": Config.sidecar_instance_id,
+            "bridge_version": __version__,
+            "routes_reads": True,
+            "routes_writes": True,
+        },
+    )
+
+
+def _heartbeat_loop(stop: threading.Event) -> None:
+    while not stop.is_set():
+        try:
+            _send_sidecar_heartbeat()
+        except Exception as exc:
+            print(
+                f"sidecar capability heartbeat failed: {type(exc).__name__}",
+                file=sys.stderr,
+            )
+        stop.wait(max(Config.sidecar_heartbeat_interval_seconds, 30.0))
 
 
 def _first(mapping: JSON, *keys: str) -> Any:
@@ -737,17 +778,70 @@ def delete_all_memories(args: JSON) -> Any:
 
 
 def list_entities(args: JSON) -> Any:
+    if _uses_sidecar():
+        entities = []
+        for entity_type in ("user", "agent", "run"):
+            page = 1
+            while True:
+                result = _sidecar_backend(
+                    "POST",
+                    "/v1/entities/query",
+                    {
+                        "project_id": Config.sidecar_project_id,
+                        "app_id": Config.default_app_id,
+                        "entity_type": entity_type,
+                        "page": page,
+                        "page_size": 100,
+                    },
+                )
+                rows = result.get("results", []) if isinstance(result, dict) else []
+                for row in rows:
+                    if not isinstance(row, dict) or not row.get("entity_id"):
+                        continue
+                    entities.append(
+                        {
+                            "id": str(row["entity_id"]),
+                            "type": entity_type,
+                            "total_memories": int(row.get("memory_count") or 0),
+                            "created_at": None,
+                            "updated_at": row.get("updated_at") or row.get("last_seen_at"),
+                        }
+                    )
+                total = int(result.get("total") or 0) if isinstance(result, dict) else 0
+                if not rows or page * 100 >= total:
+                    break
+                page += 1
+        return sorted(entities, key=lambda entity: (entity["type"], entity["id"]))
     return _backend("GET", "/entities")
 
 
 def delete_entities(args: JSON) -> Any:
     pairs = (("user", args.get("user_id")), ("agent", args.get("agent_id")), ("run", args.get("run_id")))
+    if _uses_sidecar():
+        app_id = args.get("app_id") or Config.default_app_id
+        return {
+            "results": [
+                _sidecar_backend(
+                    "DELETE",
+                    (
+                        f"/v1/entities/{quote(entity_type, safe='')}/"
+                        f"{quote(str(entity_id), safe='')}"
+                    ),
+                    query={
+                        "project_id": Config.sidecar_project_id,
+                        "app_id": app_id,
+                    },
+                )
+                for entity_type, entity_id in pairs
+                if entity_id
+            ]
+        }
+    if args.get("app_id"):
+        raise ValueError("delete_entities(app_id) is not supported by mem0 OSS server; use delete_all_memories with user_id and app_id")
     deleted = []
     for entity_type, entity_id in pairs:
         if entity_id:
             deleted.append(_backend("DELETE", f"/entities/{entity_type}/{entity_id}"))
-    if args.get("app_id"):
-        raise ValueError("delete_entities(app_id) is not supported by mem0 OSS server; use delete_all_memories with user_id and app_id")
     return {"results": deleted}
 
 
@@ -912,9 +1006,26 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
+    if Config.sidecar_required and not _uses_sidecar():
+        raise SystemExit("MEM0_SIDECAR_REQUIRED=true requires MEM0_SIDECAR_BASE_URL")
     httpd = ThreadingHTTPServer((Config.host, Config.port), Handler)
+    heartbeat_stop = threading.Event()
+    heartbeat_thread = None
+    if _uses_sidecar():
+        heartbeat_thread = threading.Thread(
+            target=_heartbeat_loop,
+            args=(heartbeat_stop,),
+            name="mem0-sidecar-heartbeat",
+            daemon=True,
+        )
+        heartbeat_thread.start()
     print(f"mem0-oss-mcp listening on {Config.host}:{Config.port}", file=sys.stderr)
-    httpd.serve_forever()
+    try:
+        httpd.serve_forever()
+    finally:
+        heartbeat_stop.set()
+        if heartbeat_thread is not None:
+            heartbeat_thread.join(timeout=1.0)
 
 
 if __name__ == "__main__":

@@ -10,6 +10,181 @@ from mem0_oss_mcp import server
 
 
 class MappingTests(unittest.TestCase):
+    def test_sidecar_entity_tools_are_scoped_and_never_call_core(self):
+        calls = []
+
+        def fake_sidecar(method, path, body=None, query=None):
+            calls.append((method, path, body, query))
+            if method == "POST":
+                entity_type = body["entity_type"]
+                return {
+                    "results": [
+                        {
+                            "id": f"projection-{entity_type}",
+                            "type": entity_type,
+                            "entity_id": f"{entity_type}-one",
+                            "memory_count": 2,
+                            "last_seen_at": "2026-07-25T00:00:00+00:00",
+                            "updated_at": "2026-07-25T01:00:00+00:00",
+                        }
+                    ],
+                    "page": 1,
+                    "page_size": 100,
+                    "total": 1,
+                    "has_more": False,
+                }
+            return {"message": "Entity deleted"}
+
+        with (
+            patch.object(server.Config, "sidecar_base_url", "http://sidecar.internal"),
+            patch.object(server.Config, "sidecar_project_id", "mem0-project"),
+            patch.object(server.Config, "default_app_id", "mem0-app"),
+            patch.object(server, "_sidecar_backend", side_effect=fake_sidecar),
+            patch.object(
+                server,
+                "_backend",
+                side_effect=AssertionError("sidecar mode must not call Core"),
+            ),
+        ):
+            entities = server.list_entities({})
+            deleted = server.delete_entities(
+                {
+                    "user_id": "alice",
+                    "agent_id": "agent-a",
+                    "run_id": "run-a",
+                    "app_id": "requested-app",
+                }
+            )
+
+        self.assertEqual(
+            entities,
+            [
+                {
+                    "id": "agent-one",
+                    "type": "agent",
+                    "total_memories": 2,
+                    "created_at": None,
+                    "updated_at": "2026-07-25T01:00:00+00:00",
+                },
+                {
+                    "id": "run-one",
+                    "type": "run",
+                    "total_memories": 2,
+                    "created_at": None,
+                    "updated_at": "2026-07-25T01:00:00+00:00",
+                },
+                {
+                    "id": "user-one",
+                    "type": "user",
+                    "total_memories": 2,
+                    "created_at": None,
+                    "updated_at": "2026-07-25T01:00:00+00:00",
+                },
+            ],
+        )
+        self.assertEqual(
+            deleted,
+            {
+                "results": [
+                    {"message": "Entity deleted"},
+                    {"message": "Entity deleted"},
+                    {"message": "Entity deleted"},
+                ]
+            },
+        )
+        self.assertEqual(
+            calls,
+            [
+                (
+                    "POST",
+                    "/v1/entities/query",
+                    {
+                        "project_id": "mem0-project",
+                        "app_id": "mem0-app",
+                        "entity_type": "user",
+                        "page": 1,
+                        "page_size": 100,
+                    },
+                    None,
+                ),
+                (
+                    "POST",
+                    "/v1/entities/query",
+                    {
+                        "project_id": "mem0-project",
+                        "app_id": "mem0-app",
+                        "entity_type": "agent",
+                        "page": 1,
+                        "page_size": 100,
+                    },
+                    None,
+                ),
+                (
+                    "POST",
+                    "/v1/entities/query",
+                    {
+                        "project_id": "mem0-project",
+                        "app_id": "mem0-app",
+                        "entity_type": "run",
+                        "page": 1,
+                        "page_size": 100,
+                    },
+                    None,
+                ),
+                (
+                    "DELETE",
+                    "/v1/entities/user/alice",
+                    None,
+                    {"project_id": "mem0-project", "app_id": "requested-app"},
+                ),
+                (
+                    "DELETE",
+                    "/v1/entities/agent/agent-a",
+                    None,
+                    {"project_id": "mem0-project", "app_id": "requested-app"},
+                ),
+                (
+                    "DELETE",
+                    "/v1/entities/run/run-a",
+                    None,
+                    {"project_id": "mem0-project", "app_id": "requested-app"},
+                ),
+            ],
+        )
+
+    def test_sidecar_capability_heartbeat_reports_read_write_routing(self):
+        calls = []
+
+        def fake_sidecar(method, path, body=None, query=None):
+            calls.append((method, path, body, query))
+            return {"ready": True}
+
+        with (
+            patch.object(server.Config, "sidecar_base_url", "http://sidecar.internal"),
+            patch.object(server.Config, "sidecar_project_id", "mem0-project"),
+            patch.object(server.Config, "sidecar_instance_id", "bridge-a"),
+            patch.object(server, "_sidecar_backend", side_effect=fake_sidecar),
+        ):
+            result = server._send_sidecar_heartbeat()
+
+        self.assertEqual(result, {"ready": True})
+        self.assertEqual(
+            calls,
+            [
+                (
+                    "POST",
+                    "/v1/projects/mem0-project/capabilities/bridge-routing/heartbeat",
+                    {
+                        "instance_id": "bridge-a",
+                        "bridge_version": server.__version__,
+                        "routes_reads": True,
+                        "routes_writes": True,
+                    },
+                    None,
+                )
+            ],
+        )
+
     def test_sidecar_add_preserves_project_and_app_scope(self):
         calls = []
 

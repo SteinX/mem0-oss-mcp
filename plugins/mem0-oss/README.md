@@ -10,6 +10,10 @@ MEM0_OSS_MCP_URL=http://<bridge-host>:8080/mcp
 MEM0_OSS_MCP_TOKEN=change-me
 ```
 
+Clients configure only this MCP URL and bearer token. `MEM0_SIDECAR_*`
+variables belong to the bridge operator and must not appear in generated
+Codex, OpenCode, Cursor, Claude, Hermes, or other client configuration.
+
 For Codex Desktop, generate a local plugin instance instead. Pass the bridge
 endpoint and token at install time; the installer writes the token to a local
 private dotenv file, while the generated MCP config stores only the URL,
@@ -96,3 +100,11 @@ installer builds it and writes a small loader into
 values passed with `--token-stdin` or `--token` are stored in a local private
 dotenv file under `~/.mem0-oss-mcp/opencode-plugins/env/`, not in generated
 TypeScript source.
+
+The generated plugin defaults to `--auto-capture-mode explicit`, so periodic
+message capture is disabled and explicit memory tools remain the write path.
+Use `bounded` for every-tenth-message sampling with duplicate and volume limits,
+or `legacy` to restore upstream every-third-message capture. Client-side Dream
+is disabled by default; pass `--client-dream` only when it is intentionally
+required. Runtime `MEM0_OSS_AUTO_CAPTURE_MODE` and `MEM0_DREAM` values override
+these generated defaults.

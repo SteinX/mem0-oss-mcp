@@ -8,6 +8,8 @@ export interface Mem0OssEnvOptions {
   url?: string;
   tokenEnvVar?: string;
   envFile?: string;
+  autoCaptureMode?: "explicit" | "bounded" | "legacy";
+  clientDream?: boolean;
 }
 
 function parseDotenvValue(raw: string): string {
@@ -132,6 +134,12 @@ export function initializeMem0OssEnv(options: Mem0OssEnvOptions = {}): void {
   }
   if (process.env.MEM0_TELEMETRY === undefined) {
     process.env.MEM0_TELEMETRY = "false";
+  }
+  if (process.env.MEM0_OSS_AUTO_CAPTURE_MODE === undefined) {
+    process.env.MEM0_OSS_AUTO_CAPTURE_MODE = options.autoCaptureMode ?? "explicit";
+  }
+  if (process.env.MEM0_DREAM === undefined) {
+    process.env.MEM0_DREAM = (options.clientDream ?? false) ? "true" : "false";
   }
   const token = resolveMem0OssTokenSync();
   if (token && !process.env.MEM0_API_KEY) {
