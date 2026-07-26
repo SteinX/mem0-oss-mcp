@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from mem0_oss_mcp import server
 from mem0_oss_mcp.auth import AuthPrincipal, AuthUnavailable, Unauthorized
+from mem0_oss_mcp.caller_context import encode_current_caller_context
 
 
 class StubAuthenticator:
@@ -84,6 +85,33 @@ def test_authenticated_request_reaches_json_rpc():
 
     assert status == 200
     assert body["result"]["serverInfo"]["name"] == "mem0-oss-mcp"
+
+
+def test_authenticated_principal_is_bound_during_json_rpc_dispatch():
+    principal = AuthPrincipal(
+        mechanism="core_api_key",
+        subject="8f7ebdcc-0df0-42e7-8f43-e7db627c9788",
+        role="admin",
+        credential_kind="core_api_key",
+        credential_id="e0544e3c-d217-40d9-bc9a-c1f64077542a",
+        credential_label="codex-devbox",
+        credential_prefix="m0sk_client_",
+    )
+    original_handle_rpc = server.handle_rpc
+    observed = []
+
+    def capture_context(message):
+        observed.append(encode_current_caller_context())
+        return original_handle_rpc(message)
+
+    with (
+        patch.object(server, "handle_rpc", side_effect=capture_context),
+        running_server(StubAuthenticator(principal)) as base_url,
+    ):
+        status, _, _ = post_initialize(base_url)
+
+    assert status == 200
+    assert observed[0] is not None
 
 
 def test_rejected_request_returns_bearer_401():

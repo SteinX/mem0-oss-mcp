@@ -16,6 +16,11 @@ from urllib.request import Request, urlopen
 
 from . import __version__
 from .auth import AuthUnavailable, McpAuthenticator, Unauthorized
+from .caller_context import (
+    CALLER_CONTEXT_HEADER,
+    bind_http_principal,
+    encode_current_caller_context,
+)
 
 
 JSON = dict[str, Any]
@@ -126,6 +131,9 @@ def _sidecar_backend(
     headers = {"Accept": "application/json"}
     if Config.sidecar_api_key:
         headers["X-API-Key"] = Config.sidecar_api_key
+        caller_context = encode_current_caller_context()
+        if caller_context is not None:
+            headers[CALLER_CONTEXT_HEADER] = caller_context
     if body is not None:
         data = json.dumps(body).encode("utf-8")
         headers["Content-Type"] = "application/json"
@@ -970,7 +978,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
             return
         try:
-            Config.authenticator.authenticate(
+            principal = Config.authenticator.authenticate(
                 self.headers.get("Authorization", "")
             )
         except Unauthorized:
@@ -987,21 +995,22 @@ class Handler(BaseHTTPRequestHandler):
             )
             return
 
-        try:
-            length = int(self.headers.get("Content-Length", "0"))
-            payload = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
-            if isinstance(payload, list):
-                responses = [r for item in payload if (r := handle_rpc(item)) is not None]
-                self._send_json(responses)
-            else:
-                response = handle_rpc(payload)
-                if response is None:
-                    self.send_response(HTTPStatus.ACCEPTED)
-                    self.end_headers()
+        with bind_http_principal(principal):
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                payload = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+                if isinstance(payload, list):
+                    responses = [r for item in payload if (r := handle_rpc(item)) is not None]
+                    self._send_json(responses)
                 else:
-                    self._send_json(response)
-        except json.JSONDecodeError:
-            self._send_json(_rpc_error(None, -32700, "parse error"), HTTPStatus.BAD_REQUEST)
+                    response = handle_rpc(payload)
+                    if response is None:
+                        self.send_response(HTTPStatus.ACCEPTED)
+                        self.end_headers()
+                    else:
+                        self._send_json(response)
+            except json.JSONDecodeError:
+                self._send_json(_rpc_error(None, -32700, "parse error"), HTTPStatus.BAD_REQUEST)
 
     def log_message(self, format: str, *args: Any) -> None:
         print(f"{self.address_string()} - {format % args}", file=sys.stderr)
