@@ -24,8 +24,8 @@ class FakeResponse:
     def __exit__(self, exc_type, exc, traceback):
         return False
 
-    def read(self):
-        return self.payload
+    def read(self, amount=-1):
+        return self.payload if amount < 0 else self.payload[:amount]
 
 
 def _core_response(
@@ -49,15 +49,48 @@ def _core_response(
     }
 
 
-def test_from_env_derives_legacy_modes():
-    disabled = McpAuthenticator.from_env("http://mem0:8000", {})
+def test_from_env_requires_explicit_mode_when_legacy_token_is_absent():
+    with pytest.raises(AuthConfigurationError, match="explicit"):
+        McpAuthenticator.from_env("http://mem0:8000", {})
+
+
+def test_from_env_derives_static_mode_for_legacy_token():
     static = McpAuthenticator.from_env(
         "http://mem0:8000",
         {"MEM0_OSS_MCP_TOKEN": "legacy-secret"},
     )
 
-    assert disabled.mode == "disabled"
     assert static.mode == "static"
+
+
+def test_disabled_mode_requires_loopback_or_explicit_insecure_override():
+    disabled = McpAuthenticator.from_env(
+        "http://mem0:8000",
+        {
+            "MEM0_OSS_MCP_AUTH_MODE": "disabled",
+            "MEM0_OSS_MCP_HOST": "127.0.0.1",
+        },
+    )
+    assert disabled.mode == "disabled"
+
+    with pytest.raises(AuthConfigurationError, match="loopback"):
+        McpAuthenticator.from_env(
+            "http://mem0:8000",
+            {
+                "MEM0_OSS_MCP_AUTH_MODE": "disabled",
+                "MEM0_OSS_MCP_HOST": "0.0.0.0",
+            },
+        )
+
+    insecure = McpAuthenticator.from_env(
+        "http://mem0:8000",
+        {
+            "MEM0_OSS_MCP_AUTH_MODE": "disabled",
+            "MEM0_OSS_MCP_HOST": "0.0.0.0",
+            "MEM0_OSS_MCP_ALLOW_INSECURE_DISABLED": "true",
+        },
+    )
+    assert insecure.mode == "disabled"
 
 
 def test_static_mode_accepts_only_the_legacy_token():
@@ -165,7 +198,10 @@ def test_core_rejection_is_unauthorized(status):
         authenticator.authenticate("Bearer m0sk_revoked")
 
 
-@pytest.mark.parametrize("failure", ["http_500", "network", "bad_json"])
+@pytest.mark.parametrize(
+    "failure",
+    ["http_500", "network", "connection_reset", "bad_json", "oversized"],
+)
 def test_core_failure_is_sanitized_unavailable(failure):
     secret = "m0sk_must_not_leak"
 
@@ -180,6 +216,10 @@ def test_core_failure_is_sanitized_unavailable(failure):
             )
         if failure == "network":
             raise urllib.error.URLError(f"failed while handling {secret}")
+        if failure == "connection_reset":
+            raise ConnectionResetError(f"reset while handling {secret}")
+        if failure == "oversized":
+            return FakeResponse({"padding": "x" * 70_000})
         return FakeResponse({"not": "a principal"})
 
     authenticator = McpAuthenticator(

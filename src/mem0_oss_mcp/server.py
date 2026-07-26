@@ -15,7 +15,12 @@ from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
 from . import __version__
-from .auth import AuthUnavailable, McpAuthenticator, Unauthorized
+from .auth import (
+    AuthConfigurationError,
+    AuthUnavailable,
+    McpAuthenticator,
+    Unauthorized,
+)
 from .caller_context import (
     CALLER_CONTEXT_HEADER,
     bind_http_principal,
@@ -51,7 +56,7 @@ class Config:
     host = os.environ.get("MEM0_OSS_MCP_HOST", "0.0.0.0")
     port = int(os.environ.get("MEM0_OSS_MCP_PORT", "8080"))
     token = os.environ.get("MEM0_OSS_MCP_TOKEN", "")
-    authenticator = McpAuthenticator.from_env(base_url)
+    authenticator: McpAuthenticator | None = None
     timeout = float(os.environ.get("MEM0_OSS_TIMEOUT", "30"))
     default_user_id = os.environ.get("MEM0_OSS_DEFAULT_USER_ID", os.environ.get("USER", "codex"))
     default_app_id = os.environ.get("MEM0_OSS_DEFAULT_APP_ID", "default")
@@ -977,8 +982,15 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.rstrip("/") != "/mcp":
             self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
             return
+        authenticator = Config.authenticator
+        if authenticator is None:
+            self._send_json(
+                {"error": "authentication unavailable"},
+                HTTPStatus.SERVICE_UNAVAILABLE,
+            )
+            return
         try:
-            principal = Config.authenticator.authenticate(
+            principal = authenticator.authenticate(
                 self.headers.get("Authorization", "")
             )
         except Unauthorized:
@@ -1033,6 +1045,10 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
+    try:
+        Config.authenticator = McpAuthenticator.from_env(Config.base_url)
+    except AuthConfigurationError as exc:
+        raise SystemExit(str(exc)) from None
     if Config.sidecar_required and not _uses_sidecar():
         raise SystemExit("MEM0_SIDECAR_REQUIRED=true requires MEM0_SIDECAR_BASE_URL")
     httpd = ThreadingHTTPServer((Config.host, Config.port), Handler)

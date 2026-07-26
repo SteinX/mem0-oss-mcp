@@ -54,6 +54,11 @@ Codex, OpenCode, Cursor, Claude, Hermes, or other client configuration.
 | `core_api_key` | any active Core per-user API key | steady state |
 
 `static` and `hybrid` require a non-empty `MEM0_OSS_MCP_TOKEN`.
+When neither a mode nor a legacy token is configured, startup fails closed.
+`disabled` must be selected explicitly and normally requires
+`MEM0_OSS_MCP_HOST` to be a loopback address. The emergency development-only
+override `MEM0_OSS_MCP_ALLOW_INSECURE_DISABLED=true` permits a non-loopback
+listener and must never be used on a shared network.
 `core_api_key` validates the incoming bearer credential through Core
 `/auth/me`; the MCP process receives no static shared secret. Core
 unavailability returns a sanitized 503, while an invalid or revoked key
@@ -64,9 +69,11 @@ page. Codex and OpenCode continue using `MEM0_OSS_MCP_TOKEN` as their local
 environment variable name, but its value becomes that client's `m0sk_...` key.
 The endpoint and MCP configuration remain unchanged.
 
-When sidecar routing is enabled, Requests attributes new rows as
-`Legacy shared MCP key` for `legacy_static` or by the Core key label and prefix
-for `core_api_key`. Historical rows created before attribution remain
+When sidecar routing is enabled with a trusted `MEM0_SIDECAR_API_KEY`, Requests
+attributes new rows as `Legacy shared MCP key` for `legacy_static` or by the
+Core key label and prefix for `core_api_key`. Without that private bridge
+credential, sidecar rejects caller-supplied attribution instead of trusting
+it. Historical rows created before attribution remain
 `Unknown (pre-attribution)`; they are never guessed or backfilled.
 
 When `MEM0_SIDECAR_BASE_URL` is set, all memory operations plus entity

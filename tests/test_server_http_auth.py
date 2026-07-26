@@ -6,8 +6,16 @@ from contextlib import contextmanager
 from http.server import ThreadingHTTPServer
 from unittest.mock import patch
 
+import pytest
+
 from mem0_oss_mcp import server
-from mem0_oss_mcp.auth import AuthPrincipal, AuthUnavailable, Unauthorized
+from mem0_oss_mcp.auth import (
+    AuthConfigurationError,
+    AuthPrincipal,
+    AuthUnavailable,
+    McpAuthenticator,
+    Unauthorized,
+)
 from mem0_oss_mcp.caller_context import encode_current_caller_context
 
 
@@ -142,3 +150,18 @@ def test_health_does_not_require_client_credentials():
 
     assert status == 200
     assert body["status"] == "ok"
+
+
+def test_invalid_auth_configuration_fails_before_binding_listener():
+    with (
+        patch.object(
+            McpAuthenticator,
+            "from_env",
+            side_effect=AuthConfigurationError("auth configuration invalid"),
+        ),
+        patch.object(server, "ThreadingHTTPServer") as listener,
+        pytest.raises(SystemExit, match="auth configuration invalid"),
+    ):
+        server.main()
+
+    listener.assert_not_called()

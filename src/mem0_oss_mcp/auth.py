@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import http.client
+import ipaddress
 import json
 import math
 import os
@@ -18,6 +20,7 @@ AuthMechanism: TypeAlias = Literal["disabled", "static", "core_api_key"]
 CredentialKind: TypeAlias = Literal["disabled", "legacy_static", "core_api_key"]
 JSONScalar: TypeAlias = str | int | float | bool | None
 JSONValue: TypeAlias = JSONScalar | list["JSONValue"] | dict[str, "JSONValue"]
+_MAX_CORE_AUTH_RESPONSE_BYTES = 64 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,7 +76,7 @@ class OpenResponse(Protocol):
         traceback: TracebackType | None,
     ) -> bool | None: ...
 
-    def read(self) -> bytes: ...
+    def read(self, amount: int = -1) -> bytes: ...
 
 
 class Opener(Protocol):
@@ -114,6 +117,20 @@ def _valid_uuid(value: str) -> bool:
     except ValueError:
         return False
     return True
+
+
+def _enabled(raw: str) -> bool:
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _is_loopback_host(raw: str) -> bool:
+    host = raw.strip().lower()
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def _parse_core_principal(payload: JSONValue) -> AuthPrincipal:
@@ -189,7 +206,24 @@ class McpAuthenticator:
         values = os.environ if env is None else env
         static_token = values.get("MEM0_OSS_MCP_TOKEN", "").strip()
         configured_mode = values.get("MEM0_OSS_MCP_AUTH_MODE", "").strip()
-        mode = configured_mode or ("static" if static_token else "disabled")
+        if configured_mode:
+            mode = configured_mode
+        elif static_token:
+            mode = "static"
+        else:
+            raise AuthConfigurationError(
+                "MCP auth mode must be explicit when MEM0_OSS_MCP_TOKEN is absent"
+            )
+        if mode == "disabled":
+            host = values.get("MEM0_OSS_MCP_HOST", "0.0.0.0")
+            insecure_override = _enabled(
+                values.get("MEM0_OSS_MCP_ALLOW_INSECURE_DISABLED", "")
+            )
+            if not _is_loopback_host(host) and not insecure_override:
+                raise AuthConfigurationError(
+                    "disabled MCP auth requires a loopback host or "
+                    "MEM0_OSS_MCP_ALLOW_INSECURE_DISABLED=true"
+                )
         auth_url = values.get(
             "MEM0_OSS_MCP_CLIENT_AUTH_URL",
             f"{base_url.rstrip('/')}/auth/me" if base_url else "",
@@ -252,7 +286,12 @@ class McpAuthenticator:
                 request,
                 timeout=self._timeout_seconds,
             ) as response:
-                payload: JSONValue = json.loads(response.read().decode("utf-8"))
+                body = response.read(_MAX_CORE_AUTH_RESPONSE_BYTES + 1)
+                if len(body) > _MAX_CORE_AUTH_RESPONSE_BYTES:
+                    raise AuthUnavailable(
+                        "client authentication service unavailable"
+                    )
+                payload: JSONValue = json.loads(body.decode("utf-8"))
         except urllib.error.HTTPError as exc:
             if exc.code in {401, 403}:
                 raise Unauthorized("credential rejected") from None
@@ -262,6 +301,8 @@ class McpAuthenticator:
         except (
             urllib.error.URLError,
             TimeoutError,
+            OSError,
+            http.client.HTTPException,
             json.JSONDecodeError,
             UnicodeError,
         ):
