@@ -267,6 +267,39 @@ def test_mcp_mixed_batch_returns_invalid_item_and_valid_response():
     assert body[1]["result"]["serverInfo"]["name"] == "mem0-oss-mcp"
 
 
+def test_mcp_all_notification_batch_returns_no_response_body():
+    payload = json.dumps(
+        [
+            {
+                "jsonrpc": "2.0",
+                "method": "notifications/initialized",
+                "params": {},
+            },
+            {
+                "jsonrpc": "2.0",
+                "method": "notifications/cancelled",
+                "params": {},
+            },
+        ]
+    ).encode("utf-8")
+    with running_server(StubAuthenticator(admin_principal())) as base_url:
+        request = urllib.request.Request(
+            f"{base_url}/mcp",
+            method="POST",
+            data=payload,
+            headers={
+                "Authorization": "Bearer client-token",
+                "Content-Type": "application/json",
+            },
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            status = response.status
+            body = response.read()
+
+    assert status == 202
+    assert body == b""
+
+
 def test_mcp_rejects_over_limit_batch_before_dispatch():
     payload = [
         {
@@ -301,8 +334,11 @@ def test_health_does_not_require_client_credentials():
     assert body["status"] == "ok"
 
 
-def test_health_proves_authenticated_sidecar_heartbeat():
+def test_health_is_side_effect_free_when_sidecar_is_configured():
+    healthy = threading.Event()
+    healthy.set()
     with (
+        patch.object(server, "_sidecar_healthy", healthy, create=True),
         patch.object(
             server,
             "_send_sidecar_heartbeat",
@@ -320,7 +356,32 @@ def test_health_proves_authenticated_sidecar_heartbeat():
             body = json.loads(response.read())
 
     assert body == {"status": "ok"}
-    heartbeat.assert_called_once_with()
+    heartbeat.assert_not_called()
+
+
+def test_health_reports_cached_sidecar_failure_without_writing_heartbeat():
+    with (
+        patch.object(
+            server,
+            "_sidecar_healthy",
+            threading.Event(),
+            create=True,
+        ),
+        patch.object(server, "_send_sidecar_heartbeat") as heartbeat,
+        running_server(
+            StubAuthenticator(Unauthorized("credential rejected")),
+            sidecar_base_url="http://sidecar.internal",
+        ) as base_url,
+        pytest.raises(urllib.error.HTTPError) as captured,
+    ):
+        urllib.request.urlopen(f"{base_url}/health", timeout=5)
+
+    assert captured.value.code == 502
+    assert json.loads(captured.value.read()) == {
+        "status": "error",
+        "error": "backend unavailable",
+    }
+    heartbeat.assert_not_called()
 
 
 def test_invalid_auth_configuration_fails_before_binding_listener():

@@ -141,6 +141,7 @@ class Config:
 
 EVENTS: dict[str, JSON] = {}
 _LIST_LIMIT_SUPPORT: dict[tuple[str, object], bool] = {}
+_sidecar_healthy = threading.Event()
 
 
 def _json_default(value: Any) -> str:
@@ -242,7 +243,9 @@ def _heartbeat_loop(stop: threading.Event) -> None:
     while not stop.is_set():
         try:
             _send_sidecar_heartbeat()
+            _sidecar_healthy.set()
         except Exception as exc:
+            _sidecar_healthy.clear()
             print(
                 f"sidecar capability heartbeat failed: {type(exc).__name__}",
                 file=sys.stderr,
@@ -1156,7 +1159,8 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/health":
             try:
                 if _uses_sidecar():
-                    _send_sidecar_heartbeat()
+                    if not _sidecar_healthy.is_set():
+                        raise BackendError(502, "sidecar heartbeat unavailable")
                 else:
                     _backend("GET", "/configure")
                 self._send_json({"status": "ok"})
@@ -1236,7 +1240,11 @@ class Handler(BaseHTTPRequestHandler):
                         )
                         is not None
                     ]
-                    self._send_json(responses)
+                    if responses:
+                        self._send_json(responses)
+                    else:
+                        self.send_response(HTTPStatus.ACCEPTED)
+                        self.end_headers()
                 elif not isinstance(payload, dict):
                     self._send_json(
                         _rpc_error(None, -32600, "invalid request"),
@@ -1283,9 +1291,11 @@ def main() -> None:
         raise SystemExit("MEM0_SIDECAR_REQUIRED=true requires MEM0_SIDECAR_BASE_URL")
     if Config.sidecar_required and not Config.sidecar_api_key:
         raise SystemExit("MEM0_SIDECAR_REQUIRED=true requires MEM0_SIDECAR_API_KEY")
+    _sidecar_healthy.clear()
     if Config.sidecar_required:
         try:
             _send_sidecar_heartbeat()
+            _sidecar_healthy.set()
         except Exception:
             raise SystemExit(
                 "required sidecar authentication or readiness check failed"
