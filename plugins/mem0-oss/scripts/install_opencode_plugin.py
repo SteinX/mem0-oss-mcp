@@ -367,7 +367,11 @@ def install_local_loader(plugin_root: Path, plugin_name: str, opencode_dir: Path
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--url", required=True, help="Absolute bridge endpoint, for example http://host:8080/mcp")
+    parser.add_argument(
+        "--url",
+        required=True,
+        help="Absolute bridge endpoint, for example https://mem0.example.com/mcp",
+    )
     parser.add_argument("--name", default=DEFAULT_PLUGIN_NAME, help="Generated plugin id, default: mem0-oss")
     parser.add_argument("--display-name", help="Display name used in generated package metadata")
     parser.add_argument("--token-env-var", default=DEFAULT_TOKEN_ENV_VAR, help="Bearer token env var name")

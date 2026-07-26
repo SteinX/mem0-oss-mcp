@@ -58,7 +58,11 @@ def test_private_sidecar_request_carries_only_bounded_safe_caller_context():
     with (
         patch.object(server.Config, "sidecar_base_url", "http://sidecar.internal"),
         patch.object(server.Config, "sidecar_api_key", "internal-sidecar-secret"),
-        patch.object(server, "urlopen", side_effect=fake_urlopen),
+        patch.object(
+            server,
+            "_open_no_redirect",
+            side_effect=fake_urlopen,
+        ),
         bind_http_principal(_core_principal("codex-devbox")),
     ):
         server._sidecar_backend("POST", "/v1/memories", {"text": "remember"})
@@ -113,7 +117,11 @@ def test_caller_context_is_not_sent_without_trusted_sidecar_credential():
     with (
         patch.object(server.Config, "sidecar_base_url", "http://sidecar.internal"),
         patch.object(server.Config, "sidecar_api_key", ""),
-        patch.object(server, "urlopen", side_effect=fake_urlopen),
+        patch.object(
+            server,
+            "_open_no_redirect",
+            side_effect=fake_urlopen,
+        ),
         bind_http_principal(_core_principal("codex-devbox")),
     ):
         server._sidecar_backend("GET", "/v1/memories")
@@ -136,7 +144,11 @@ def test_system_sidecar_request_never_inherits_prior_http_principal():
     with (
         patch.object(server.Config, "sidecar_base_url", "http://sidecar.internal"),
         patch.object(server.Config, "sidecar_api_key", "internal-sidecar-secret"),
-        patch.object(server, "urlopen", side_effect=fake_urlopen),
+        patch.object(
+            server,
+            "_open_no_redirect",
+            side_effect=fake_urlopen,
+        ),
     ):
         server._sidecar_backend("GET", "/readyz")
 

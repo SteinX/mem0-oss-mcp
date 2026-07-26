@@ -17,8 +17,8 @@ from mem0_oss_mcp.auth import (
 
 
 class FakeResponse:
-    def __init__(self, payload):
-        self.payload = json.dumps(payload).encode("utf-8")
+    def __init__(self, payload, *, raw=False):
+        self.payload = payload if raw else json.dumps(payload).encode("utf-8")
 
     def __enter__(self):
         return self
@@ -84,6 +84,7 @@ def test_disabled_mode_requires_loopback():
             },
         )
 
+
 def test_static_mode_accepts_only_the_legacy_token():
     authenticator = McpAuthenticator(
         AuthSettings(
@@ -139,6 +140,42 @@ def test_core_api_key_mode_translates_bearer_to_private_x_api_key():
     assert principal.credential_id == "e0544e3c-d217-40d9-bc9a-c1f64077542a"
     assert principal.credential_label == "codex-devbox"
     assert principal.credential_prefix == "m0sk_client_"
+
+
+def test_legacy_empty_label_uses_stable_prefix_fallback():
+    authenticator = McpAuthenticator(
+        AuthSettings(
+            mode="core_api_key",
+            static_token="",
+            client_auth_url="http://mem0:8000/auth/me",
+            timeout_seconds=5,
+        ),
+        opener=lambda request, timeout: FakeResponse(_core_response(label="")),
+    )
+
+    principal = authenticator.authenticate("Bearer m0sk_client_secret")
+
+    assert principal.credential_label == "Legacy client key (m0sk_client_...)"
+
+
+def test_non_admin_core_key_is_rejected():
+    response = _core_response()
+    response["role"] = "member"
+    authenticator = McpAuthenticator(
+        AuthSettings(
+            mode="core_api_key",
+            static_token="",
+            client_auth_url="http://mem0:8000/auth/me",
+            timeout_seconds=5,
+        ),
+        opener=lambda request, timeout: FakeResponse(response),
+    )
+
+    with pytest.raises(
+        Unauthorized,
+        match="administrator credential required",
+    ):
+        authenticator.authenticate("Bearer m0sk_member_secret")
 
 
 def test_default_core_auth_opener_never_follows_redirects():
@@ -204,7 +241,9 @@ def test_hybrid_accepts_legacy_without_calling_core_and_falls_back_for_new_key()
 
     assert authenticator.authenticate("Bearer legacy-secret").mechanism == "static"
     assert calls == []
-    assert authenticator.authenticate("Bearer m0sk_new_client").mechanism == "core_api_key"
+    assert (
+        authenticator.authenticate("Bearer m0sk_new_client").mechanism == "core_api_key"
+    )
     assert calls == ["m0sk_new_client"]
 
 
@@ -255,6 +294,8 @@ def test_core_failure_is_sanitized_unavailable(failure):
             raise ConnectionResetError(f"reset while handling {secret}")
         if failure == "oversized":
             return FakeResponse({"padding": "x" * 70_000})
+        if failure == "bad_json":
+            return FakeResponse(b"{not-json", raw=True)
         return FakeResponse({"not": "a principal"})
 
     authenticator = McpAuthenticator(
@@ -276,7 +317,6 @@ def test_core_failure_is_sanitized_unavailable(failure):
     ("response", "expected_error"),
     [
         (_core_response(key_id="not-a-uuid"), Unauthorized),
-        (_core_response(label=""), Unauthorized),
         (_core_response(label="x" * 256), Unauthorized),
         (_core_response(key_prefix="x" * 13), Unauthorized),
         (

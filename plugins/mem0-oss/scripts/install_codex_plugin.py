@@ -537,7 +537,11 @@ def run_codex_install(root: Path, marketplace_name: str, plugin_name: str) -> No
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--url", required=True, help="Absolute bridge endpoint, for example http://host:8080/mcp")
+    parser.add_argument(
+        "--url",
+        required=True,
+        help="Absolute bridge endpoint, for example https://mem0.example.com/mcp",
+    )
     parser.add_argument("--name", default="mem0-oss", help="Generated plugin id, default: mem0-oss")
     parser.add_argument("--display-name", help="Display name shown in Codex")
     parser.add_argument("--server-name", default=DEFAULT_SERVER_NAME, help="MCP server name, default: mem0")

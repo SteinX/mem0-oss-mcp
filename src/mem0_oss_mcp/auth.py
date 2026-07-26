@@ -163,13 +163,14 @@ def _parse_core_principal(payload: JSONValue) -> AuthPrincipal:
         case _:
             raise Unauthorized("credential is not a client API key")
 
-    valid_identity = _valid_uuid(subject) and bool(role) and len(role) <= 64
+    normalized_label = label.strip() or f"Legacy client key ({prefix}...)"
+    valid_identity = _valid_uuid(subject) and role == "admin"
     valid_credential = (
-        _valid_uuid(credential_id)
-        and 1 <= len(label) <= 255
-        and 1 <= len(prefix) <= 12
+        _valid_uuid(credential_id) and len(label) <= 255 and 1 <= len(prefix) <= 12
     )
     if not valid_identity:
+        if _valid_uuid(subject) and bool(role) and len(role) <= 64:
+            raise Unauthorized("administrator credential required")
         raise AuthUnavailable("client authentication service unavailable")
     if not valid_credential:
         raise Unauthorized("credential is not a valid client API key")
@@ -180,7 +181,7 @@ def _parse_core_principal(payload: JSONValue) -> AuthPrincipal:
         role=role,
         credential_kind="core_api_key",
         credential_id=credential_id,
-        credential_label=label,
+        credential_label=normalized_label,
         credential_prefix=prefix,
     )
 
@@ -296,16 +297,12 @@ class McpAuthenticator:
             ) as response:
                 body = response.read(_MAX_CORE_AUTH_RESPONSE_BYTES + 1)
                 if len(body) > _MAX_CORE_AUTH_RESPONSE_BYTES:
-                    raise AuthUnavailable(
-                        "client authentication service unavailable"
-                    )
+                    raise AuthUnavailable("client authentication service unavailable")
                 payload: JSONValue = json.loads(body.decode("utf-8"))
         except urllib.error.HTTPError as exc:
             if exc.code in {401, 403}:
                 raise Unauthorized("credential rejected") from None
-            raise AuthUnavailable(
-                "client authentication service unavailable"
-            ) from None
+            raise AuthUnavailable("client authentication service unavailable") from None
         except (
             urllib.error.URLError,
             TimeoutError,
@@ -314,7 +311,5 @@ class McpAuthenticator:
             json.JSONDecodeError,
             UnicodeError,
         ):
-            raise AuthUnavailable(
-                "client authentication service unavailable"
-            ) from None
+            raise AuthUnavailable("client authentication service unavailable") from None
         return _parse_core_principal(payload)
