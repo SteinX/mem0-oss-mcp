@@ -1,7 +1,9 @@
 import io
 import json
+import threading
 import urllib.error
 from email.message import Message
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
@@ -63,7 +65,7 @@ def test_from_env_derives_static_mode_for_legacy_token():
     assert static.mode == "static"
 
 
-def test_disabled_mode_requires_loopback_or_explicit_insecure_override():
+def test_disabled_mode_requires_loopback():
     disabled = McpAuthenticator.from_env(
         "http://mem0:8000",
         {
@@ -81,17 +83,6 @@ def test_disabled_mode_requires_loopback_or_explicit_insecure_override():
                 "MEM0_OSS_MCP_HOST": "0.0.0.0",
             },
         )
-
-    insecure = McpAuthenticator.from_env(
-        "http://mem0:8000",
-        {
-            "MEM0_OSS_MCP_AUTH_MODE": "disabled",
-            "MEM0_OSS_MCP_HOST": "0.0.0.0",
-            "MEM0_OSS_MCP_ALLOW_INSECURE_DISABLED": "true",
-        },
-    )
-    assert insecure.mode == "disabled"
-
 
 def test_static_mode_accepts_only_the_legacy_token():
     authenticator = McpAuthenticator(
@@ -148,6 +139,50 @@ def test_core_api_key_mode_translates_bearer_to_private_x_api_key():
     assert principal.credential_id == "e0544e3c-d217-40d9-bc9a-c1f64077542a"
     assert principal.credential_label == "codex-devbox"
     assert principal.credential_prefix == "m0sk_client_"
+
+
+def test_default_core_auth_opener_never_follows_redirects():
+    observed = {"redirect_target_requests": 0}
+    redirect_target_url = ""
+
+    class RedirectHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path == "/auth/me":
+                self.send_response(302)
+                self.send_header("Location", redirect_target_url)
+                self.end_headers()
+                return
+            observed["redirect_target_requests"] += 1
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(_core_response()).encode("utf-8"))
+
+        def log_message(self, format, *args):
+            return
+
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), RedirectHandler)
+    redirect_target_url = f"http://127.0.0.1:{httpd.server_port}/capture"
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        authenticator = McpAuthenticator(
+            AuthSettings(
+                mode="core_api_key",
+                static_token="",
+                client_auth_url=f"http://127.0.0.1:{httpd.server_port}/auth/me",
+                timeout_seconds=5,
+            ),
+        )
+
+        with pytest.raises(AuthUnavailable):
+            authenticator.authenticate("Bearer m0sk_redirect_secret")
+    finally:
+        httpd.shutdown()
+        thread.join(timeout=5)
+        httpd.server_close()
+
+    assert observed["redirect_target_requests"] == 0
 
 
 def test_hybrid_accepts_legacy_without_calling_core_and_falls_back_for_new_key():

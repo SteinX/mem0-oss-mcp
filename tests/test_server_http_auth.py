@@ -75,6 +75,24 @@ def post_initialize(base_url, token="client-token"):
         return exc.code, dict(exc.headers), json.loads(exc.read())
 
 
+def post_raw(base_url, *, body, content_length):
+    request = urllib.request.Request(
+        f"{base_url}/mcp",
+        method="POST",
+        data=body,
+        headers={
+            "Authorization": "Bearer client-token",
+            "Content-Type": "application/json",
+            "Content-Length": str(content_length),
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            return response.status, json.loads(response.read())
+    except urllib.error.HTTPError as exc:
+        return exc.code, json.loads(exc.read())
+
+
 def test_authenticated_request_reaches_json_rpc():
     authenticator = StubAuthenticator(
         AuthPrincipal(
@@ -140,6 +158,51 @@ def test_auth_backend_failure_returns_sanitized_503():
     assert status == 503
     assert body == {"error": "authentication unavailable"}
     assert "m0sk_must_not_leak" not in json.dumps(body)
+
+
+def test_mcp_rejects_oversized_request_before_reading_body():
+    principal = AuthPrincipal(
+        mechanism="core_api_key",
+        subject="8f7ebdcc-0df0-42e7-8f43-e7db627c9788",
+        role="admin",
+        credential_kind="core_api_key",
+        credential_id="e0544e3c-d217-40d9-bc9a-c1f64077542a",
+        credential_label="codex-devbox",
+        credential_prefix="m0sk_client_",
+    )
+
+    with running_server(StubAuthenticator(principal)) as base_url:
+        status, body = post_raw(
+            base_url,
+            body=b"{}",
+            content_length=server._MAX_MCP_REQUEST_BYTES + 1,
+        )
+
+    assert status == 413
+    assert body == {"error": "request too large"}
+
+
+@pytest.mark.parametrize("content_length", ["invalid", "-1"])
+def test_mcp_rejects_invalid_content_length(content_length):
+    principal = AuthPrincipal(
+        mechanism="core_api_key",
+        subject="8f7ebdcc-0df0-42e7-8f43-e7db627c9788",
+        role="admin",
+        credential_kind="core_api_key",
+        credential_id="e0544e3c-d217-40d9-bc9a-c1f64077542a",
+        credential_label="codex-devbox",
+        credential_prefix="m0sk_client_",
+    )
+
+    with running_server(StubAuthenticator(principal)) as base_url:
+        status, body = post_raw(
+            base_url,
+            body=b"{}",
+            content_length=content_length,
+        )
+
+    assert status == 400
+    assert body["error"]["code"] == -32700
 
 
 def test_health_does_not_require_client_credentials():

@@ -55,10 +55,8 @@ Codex, OpenCode, Cursor, Claude, Hermes, or other client configuration.
 
 `static` and `hybrid` require a non-empty `MEM0_OSS_MCP_TOKEN`.
 When neither a mode nor a legacy token is configured, startup fails closed.
-`disabled` must be selected explicitly and normally requires
-`MEM0_OSS_MCP_HOST` to be a loopback address. The emergency development-only
-override `MEM0_OSS_MCP_ALLOW_INSECURE_DISABLED=true` permits a non-loopback
-listener and must never be used on a shared network.
+`disabled` must be selected explicitly and requires `MEM0_OSS_MCP_HOST` to be
+a loopback address; there is no non-loopback override.
 `core_api_key` validates the incoming bearer credential through Core
 `/auth/me`; the MCP process receives no static shared secret. Core
 unavailability returns a sanitized 503, while an invalid or revoked key

@@ -8,7 +8,7 @@ import time
 import uuid
 from datetime import date, datetime, timezone
 from http import HTTPStatus
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer as _ThreadingHTTPServer
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
@@ -31,6 +31,33 @@ from .caller_context import (
 JSON = dict[str, Any]
 DEFAULT_LIST_FETCH_LIMIT = 5000
 DEFAULT_BACKEND_LIST_RETRY_LIMIT = 1000
+_MAX_MCP_REQUEST_BYTES = 1024 * 1024
+_MAX_CONCURRENT_REQUESTS = 64
+
+
+class ThreadingHTTPServer(_ThreadingHTTPServer):
+    daemon_threads = True
+    request_queue_size = _MAX_CONCURRENT_REQUESTS
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._request_slots = threading.BoundedSemaphore(_MAX_CONCURRENT_REQUESTS)
+
+    def process_request(self, request: Any, client_address: Any) -> None:
+        if not self._request_slots.acquire(blocking=False):
+            self.close_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            self._request_slots.release()
+            raise
+
+    def process_request_thread(self, request: Any, client_address: Any) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._request_slots.release()
 
 
 def _read_backend_list_fetch_limit(list_fetch_limit: int) -> int:
@@ -965,6 +992,10 @@ def _rpc_tool_error(msg_id: Any, message: str) -> JSON:
 class Handler(BaseHTTPRequestHandler):
     server_version = "mem0-oss-mcp"
 
+    def setup(self) -> None:
+        super().setup()
+        self.connection.settimeout(max(1.0, min(Config.timeout, 60.0)))
+
     def do_GET(self) -> None:
         if self.path == "/health":
             try:
@@ -973,8 +1004,11 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     _backend("GET", "/configure")
                 self._send_json({"status": "ok"})
-            except Exception as exc:
-                self._send_json({"status": "error", "error": str(exc)}, HTTPStatus.BAD_GATEWAY)
+            except Exception:
+                self._send_json(
+                    {"status": "error", "error": "backend unavailable"},
+                    HTTPStatus.BAD_GATEWAY,
+                )
             return
         self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
 
@@ -1010,6 +1044,14 @@ class Handler(BaseHTTPRequestHandler):
         with bind_http_principal(principal):
             try:
                 length = int(self.headers.get("Content-Length", "0"))
+                if length < 0:
+                    raise ValueError
+                if length > _MAX_MCP_REQUEST_BYTES:
+                    self._send_json(
+                        {"error": "request too large"},
+                        HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                    )
+                    return
                 payload = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
                 if isinstance(payload, list):
                     responses = [r for item in payload if (r := handle_rpc(item)) is not None]
@@ -1021,7 +1063,7 @@ class Handler(BaseHTTPRequestHandler):
                         self.end_headers()
                     else:
                         self._send_json(response)
-            except json.JSONDecodeError:
+            except (ValueError, UnicodeDecodeError):
                 self._send_json(_rpc_error(None, -32700, "parse error"), HTTPStatus.BAD_REQUEST)
 
     def log_message(self, format: str, *args: Any) -> None:

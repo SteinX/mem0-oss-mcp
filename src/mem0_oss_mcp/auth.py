@@ -88,12 +88,28 @@ class Opener(Protocol):
     ) -> OpenResponse: ...
 
 
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(
+        self,
+        req,
+        fp,
+        code,
+        msg,
+        headers,
+        newurl,
+    ):
+        return None
+
+
 def _default_opener(
     request: urllib.request.Request,
     *,
     timeout: float,
 ) -> OpenResponse:
-    return urllib.request.urlopen(request, timeout=timeout)
+    return urllib.request.build_opener(_NoRedirectHandler()).open(
+        request,
+        timeout=timeout,
+    )
 
 
 def _parse_mode(raw: str) -> AuthMode:
@@ -117,10 +133,6 @@ def _valid_uuid(value: str) -> bool:
     except ValueError:
         return False
     return True
-
-
-def _enabled(raw: str) -> bool:
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _is_loopback_host(raw: str) -> bool:
@@ -216,13 +228,9 @@ class McpAuthenticator:
             )
         if mode == "disabled":
             host = values.get("MEM0_OSS_MCP_HOST", "0.0.0.0")
-            insecure_override = _enabled(
-                values.get("MEM0_OSS_MCP_ALLOW_INSECURE_DISABLED", "")
-            )
-            if not _is_loopback_host(host) and not insecure_override:
+            if not _is_loopback_host(host):
                 raise AuthConfigurationError(
-                    "disabled MCP auth requires a loopback host or "
-                    "MEM0_OSS_MCP_ALLOW_INSECURE_DISABLED=true"
+                    "disabled MCP auth requires a loopback host"
                 )
         auth_url = values.get(
             "MEM0_OSS_MCP_CLIENT_AUTH_URL",
