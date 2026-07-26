@@ -23,6 +23,10 @@ MEM0_SIDECAR_REQUIRED=true
 
 MEM0_OSS_MCP_HOST=0.0.0.0
 MEM0_OSS_MCP_PORT=8080
+# disabled | static | hybrid | core_api_key
+MEM0_OSS_MCP_AUTH_MODE=static
+MEM0_OSS_MCP_CLIENT_AUTH_URL=http://mem0:8000/auth/me
+MEM0_OSS_MCP_CLIENT_AUTH_TIMEOUT_SECONDS=5
 MEM0_OSS_MCP_TOKEN=change-me
 
 MEM0_OSS_DEFAULT_USER_ID=codex
@@ -39,6 +43,31 @@ not assumed.
 Clients configure only the public MCP URL and bearer token. `MEM0_SIDECAR_*`
 variables are private bridge/operator settings and must not be copied into
 Codex, OpenCode, Cursor, Claude, Hermes, or other client configuration.
+
+### MCP client authentication
+
+| Mode | Accepted credentials | Intended use |
+| --- | --- | --- |
+| `disabled` | none | loopback-only development |
+| `static` | `MEM0_OSS_MCP_TOKEN` | backward-compatible deployments |
+| `hybrid` | legacy static token or Core API key | migration only |
+| `core_api_key` | any active Core per-user API key | steady state |
+
+`static` and `hybrid` require a non-empty `MEM0_OSS_MCP_TOKEN`.
+`core_api_key` validates the incoming bearer credential through Core
+`/auth/me`; the MCP process receives no static shared secret. Core
+unavailability returns a sanitized 503, while an invalid or revoked key
+returns 401.
+
+Create one named Core API key per client in the dashboard's **Client Keys**
+page. Codex and OpenCode continue using `MEM0_OSS_MCP_TOKEN` as their local
+environment variable name, but its value becomes that client's `m0sk_...` key.
+The endpoint and MCP configuration remain unchanged.
+
+When sidecar routing is enabled, Requests attributes new rows as
+`Legacy shared MCP key` for `legacy_static` or by the Core key label and prefix
+for `core_api_key`. Historical rows created before attribution remain
+`Unknown (pre-attribution)`; they are never guessed or backfilled.
 
 When `MEM0_SIDECAR_BASE_URL` is set, all memory operations plus entity
 list/delete use the sidecar so its durable project/app index stays current.
