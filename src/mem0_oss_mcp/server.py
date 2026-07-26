@@ -15,6 +15,7 @@ from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
 from . import __version__
+from .auth import AuthUnavailable, McpAuthenticator, Unauthorized
 
 
 JSON = dict[str, Any]
@@ -45,6 +46,7 @@ class Config:
     host = os.environ.get("MEM0_OSS_MCP_HOST", "0.0.0.0")
     port = int(os.environ.get("MEM0_OSS_MCP_PORT", "8080"))
     token = os.environ.get("MEM0_OSS_MCP_TOKEN", "")
+    authenticator = McpAuthenticator.from_env(base_url)
     timeout = float(os.environ.get("MEM0_OSS_TIMEOUT", "30"))
     default_user_id = os.environ.get("MEM0_OSS_DEFAULT_USER_ID", os.environ.get("USER", "codex"))
     default_app_id = os.environ.get("MEM0_OSS_DEFAULT_APP_ID", "default")
@@ -967,8 +969,22 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.rstrip("/") != "/mcp":
             self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
             return
-        if not self._authorized():
-            self._send_json({"error": "unauthorized"}, HTTPStatus.UNAUTHORIZED)
+        try:
+            Config.authenticator.authenticate(
+                self.headers.get("Authorization", "")
+            )
+        except Unauthorized:
+            self._send_json(
+                {"error": "unauthorized"},
+                HTTPStatus.UNAUTHORIZED,
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+            return
+        except AuthUnavailable:
+            self._send_json(
+                {"error": "authentication unavailable"},
+                HTTPStatus.SERVICE_UNAVAILABLE,
+            )
             return
 
         try:
@@ -987,20 +1003,22 @@ class Handler(BaseHTTPRequestHandler):
         except json.JSONDecodeError:
             self._send_json(_rpc_error(None, -32700, "parse error"), HTTPStatus.BAD_REQUEST)
 
-    def log_message(self, fmt: str, *args: Any) -> None:
-        print(f"{self.address_string()} - {fmt % args}", file=sys.stderr)
+    def log_message(self, format: str, *args: Any) -> None:
+        print(f"{self.address_string()} - {format % args}", file=sys.stderr)
 
-    def _authorized(self) -> bool:
-        if not Config.token:
-            return True
-        auth = self.headers.get("Authorization", "")
-        return auth == f"Bearer {Config.token}"
-
-    def _send_json(self, body: Any, status: HTTPStatus = HTTPStatus.OK) -> None:
+    def _send_json(
+        self,
+        body: Any,
+        status: HTTPStatus = HTTPStatus.OK,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         data = json.dumps(body, default=_json_default).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(data)
 
