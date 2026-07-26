@@ -335,10 +335,12 @@ def test_health_does_not_require_client_credentials():
 
 
 def test_health_is_side_effect_free_when_sidecar_is_configured():
-    healthy = threading.Event()
-    healthy.set()
     with (
-        patch.object(server, "_sidecar_healthy", healthy, create=True),
+        patch.object(
+            server,
+            "_sidecar_backend",
+            return_value={"status": "ok"},
+        ) as sidecar_backend,
         patch.object(
             server,
             "_send_sidecar_heartbeat",
@@ -356,17 +358,17 @@ def test_health_is_side_effect_free_when_sidecar_is_configured():
             body = json.loads(response.read())
 
     assert body == {"status": "ok"}
+    sidecar_backend.assert_called_once_with("GET", "/readyz")
     heartbeat.assert_not_called()
 
 
-def test_health_reports_cached_sidecar_failure_without_writing_heartbeat():
+def test_health_reports_live_sidecar_failure_without_writing_heartbeat():
     with (
         patch.object(
             server,
-            "_sidecar_healthy",
-            threading.Event(),
-            create=True,
-        ),
+            "_sidecar_backend",
+            side_effect=server.BackendError(502, "sidecar unavailable"),
+        ) as sidecar_backend,
         patch.object(server, "_send_sidecar_heartbeat") as heartbeat,
         running_server(
             StubAuthenticator(Unauthorized("credential rejected")),
@@ -381,6 +383,7 @@ def test_health_reports_cached_sidecar_failure_without_writing_heartbeat():
         "status": "error",
         "error": "backend unavailable",
     }
+    sidecar_backend.assert_called_once_with("GET", "/readyz")
     heartbeat.assert_not_called()
 
 

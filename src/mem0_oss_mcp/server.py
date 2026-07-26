@@ -1159,8 +1159,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/health":
             try:
                 if _uses_sidecar():
-                    if not _sidecar_healthy.is_set():
-                        raise BackendError(502, "sidecar heartbeat unavailable")
+                    _sidecar_backend("GET", "/readyz")
                 else:
                     _backend("GET", "/configure")
                 self._send_json({"status": "ok"})
