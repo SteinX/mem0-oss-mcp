@@ -8,18 +8,80 @@ import time
 import uuid
 from datetime import date, datetime, timezone
 from http import HTTPStatus
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import (
+    BaseHTTPRequestHandler,
+    ThreadingHTTPServer as _ThreadingHTTPServer,
+)
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from . import __version__
+from .auth import (
+    AuthConfigurationError,
+    AuthUnavailable,
+    McpAuthenticator,
+    Unauthorized,
+)
+from .caller_context import (
+    CALLER_CONTEXT_HEADER,
+    bind_http_principal,
+    encode_current_caller_context,
+)
 
 
 JSON = dict[str, Any]
 DEFAULT_LIST_FETCH_LIMIT = 5000
 DEFAULT_BACKEND_LIST_RETRY_LIMIT = 1000
+_MAX_MCP_REQUEST_BYTES = 1024 * 1024
+_MAX_CONCURRENT_REQUESTS = 64
+_MAX_MCP_BATCH_ITEMS = 64
+
+
+class _NoRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(
+        self,
+        req,
+        fp,
+        code,
+        msg,
+        headers,
+        newurl,
+    ):
+        return None
+
+
+def _open_no_redirect(request: Request, *, timeout: float):
+    return build_opener(_NoRedirectHandler()).open(
+        request,
+        timeout=timeout,
+    )
+
+
+class ThreadingHTTPServer(_ThreadingHTTPServer):
+    daemon_threads = True
+    request_queue_size = _MAX_CONCURRENT_REQUESTS
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._request_slots = threading.BoundedSemaphore(_MAX_CONCURRENT_REQUESTS)
+
+    def process_request(self, request: Any, client_address: Any) -> None:
+        if not self._request_slots.acquire(blocking=False):
+            self.close_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            self._request_slots.release()
+            raise
+
+    def process_request_thread(self, request: Any, client_address: Any) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._request_slots.release()
 
 
 def _read_backend_list_fetch_limit(list_fetch_limit: int) -> int:
@@ -45,12 +107,21 @@ class Config:
     host = os.environ.get("MEM0_OSS_MCP_HOST", "0.0.0.0")
     port = int(os.environ.get("MEM0_OSS_MCP_PORT", "8080"))
     token = os.environ.get("MEM0_OSS_MCP_TOKEN", "")
+    authenticator: McpAuthenticator | None = None
     timeout = float(os.environ.get("MEM0_OSS_TIMEOUT", "30"))
-    default_user_id = os.environ.get("MEM0_OSS_DEFAULT_USER_ID", os.environ.get("USER", "codex"))
+    default_user_id = os.environ.get(
+        "MEM0_OSS_DEFAULT_USER_ID", os.environ.get("USER", "codex")
+    )
     default_app_id = os.environ.get("MEM0_OSS_DEFAULT_APP_ID", "default")
-    list_fetch_limit = int(os.environ.get("MEM0_OSS_LIST_FETCH_LIMIT", str(DEFAULT_LIST_FETCH_LIMIT)))
+    list_fetch_limit = int(
+        os.environ.get("MEM0_OSS_LIST_FETCH_LIMIT", str(DEFAULT_LIST_FETCH_LIMIT))
+    )
     backend_list_fetch_limit = _read_backend_list_fetch_limit(list_fetch_limit)
-    backend_list_retry_limit = int(os.environ.get("MEM0_OSS_BACKEND_LIST_RETRY_LIMIT", str(DEFAULT_BACKEND_LIST_RETRY_LIMIT)))
+    backend_list_retry_limit = int(
+        os.environ.get(
+            "MEM0_OSS_BACKEND_LIST_RETRY_LIMIT", str(DEFAULT_BACKEND_LIST_RETRY_LIMIT)
+        )
+    )
     sidecar_base_url = os.environ.get("MEM0_SIDECAR_BASE_URL", "").rstrip("/")
     sidecar_project_id = os.environ.get("MEM0_SIDECAR_PROJECT_ID", "default")
     sidecar_api_key = os.environ.get("MEM0_SIDECAR_API_KEY", "")
@@ -70,13 +141,16 @@ class Config:
 
 EVENTS: dict[str, JSON] = {}
 _LIST_LIMIT_SUPPORT: dict[tuple[str, object], bool] = {}
+_sidecar_healthy = threading.Event()
 
 
 def _json_default(value: Any) -> str:
     return str(value)
 
 
-def _backend(method: str, path: str, body: JSON | None = None, query: JSON | None = None) -> Any:
+def _backend(
+    method: str, path: str, body: JSON | None = None, query: JSON | None = None
+) -> Any:
     if not Config.base_url:
         raise BackendError(500, "MEM0_OSS_BASE_URL is not set")
     if not Config.api_key:
@@ -96,7 +170,7 @@ def _backend(method: str, path: str, body: JSON | None = None, query: JSON | Non
 
     req = Request(url, data=data, headers=headers, method=method)
     try:
-        with urlopen(req, timeout=Config.timeout) as resp:
+        with _open_no_redirect(req, timeout=Config.timeout) as resp:
             raw = resp.read().decode("utf-8")
             return json.loads(raw) if raw else {}
     except HTTPError as exc:
@@ -124,13 +198,16 @@ def _sidecar_backend(
     headers = {"Accept": "application/json"}
     if Config.sidecar_api_key:
         headers["X-API-Key"] = Config.sidecar_api_key
+        caller_context = encode_current_caller_context()
+        if caller_context is not None:
+            headers[CALLER_CONTEXT_HEADER] = caller_context
     if body is not None:
         data = json.dumps(body).encode("utf-8")
         headers["Content-Type"] = "application/json"
 
     request = Request(url, data=data, headers=headers, method=method)
     try:
-        with urlopen(request, timeout=Config.timeout) as response:
+        with _open_no_redirect(request, timeout=Config.timeout) as response:
             raw = response.read().decode("utf-8")
             return json.loads(raw) if raw else {}
     except HTTPError as exc:
@@ -166,7 +243,9 @@ def _heartbeat_loop(stop: threading.Event) -> None:
     while not stop.is_set():
         try:
             _send_sidecar_heartbeat()
+            _sidecar_healthy.set()
         except Exception as exc:
+            _sidecar_healthy.clear()
             print(
                 f"sidecar capability heartbeat failed: {type(exc).__name__}",
                 file=sys.stderr,
@@ -223,7 +302,11 @@ def normalize_filters(filters: Any) -> Any:
         merged = _merge_flat_filters(normalized_items)
         return merged if merged is not None else {"AND": normalized_items}
 
-    if keys == {"OR"} and isinstance(filters.get("OR"), list) and len(filters["OR"]) == 1:
+    if (
+        keys == {"OR"}
+        and isinstance(filters.get("OR"), list)
+        and len(filters["OR"]) == 1
+    ):
         normalized_item = normalize_filters(filters["OR"][0])
         if isinstance(normalized_item, dict):
             return normalized_item
@@ -245,7 +328,9 @@ def normalize_filters(filters: Any) -> Any:
 def _merge_flat_filters(items: list[Any]) -> JSON | None:
     merged: JSON = {}
     for item in items:
-        if not isinstance(item, dict) or any(key in item for key in ("AND", "OR", "NOT")):
+        if not isinstance(item, dict) or any(
+            key in item for key in ("AND", "OR", "NOT")
+        ):
             return None
         for key, value in item.items():
             if key in merged and merged[key] != value:
@@ -303,7 +388,9 @@ def _memory_app_id(memory: JSON) -> Any:
 def _expiration_value(memory: JSON) -> Any:
     if not isinstance(memory, dict):
         return None
-    return _memory_metadata(memory).get("expiration_date") or memory.get("expiration_date")
+    return _memory_metadata(memory).get("expiration_date") or memory.get(
+        "expiration_date"
+    )
 
 
 def _is_expired(memory: JSON) -> bool:
@@ -385,7 +472,12 @@ def _paged(items: list[Any], args: JSON, extra: JSON | None = None) -> JSON:
     page = int(args.get("page") or 1)
     size = int(args.get("page_size") or args.get("pageSize") or len(items) or 100)
     start = max(page - 1, 0) * size
-    response = {"results": items[start : start + size], "count": len(items), "page": page, "page_size": size}
+    response = {
+        "results": items[start : start + size],
+        "count": len(items),
+        "page": page,
+        "page_size": size,
+    }
     if extra:
         response.update(extra)
     return response
@@ -413,7 +505,9 @@ def _backend_honors_list_limit(query: JSON) -> bool:
     except BackendError:
         return False
 
-    probe_items = probe_result.get("results", probe_result if isinstance(probe_result, list) else [])
+    probe_items = probe_result.get(
+        "results", probe_result if isinstance(probe_result, list) else []
+    )
     supported = isinstance(probe_items, list) and len(probe_items) <= 1
     _LIST_LIMIT_SUPPORT[cache_key] = supported
     return supported
@@ -489,7 +583,10 @@ def search_memories(args: JSON) -> Any:
     if not query:
         raise ValueError("search_memories requires query")
 
-    body: JSON = {"query": query, "filters": normalize_filters(args.get("filters") or {})}
+    body: JSON = {
+        "query": query,
+        "filters": normalize_filters(args.get("filters") or {}),
+    }
     requested_top_k: int | None = None
     top_k = _first(args, "top_k", "topK", "limit")
     if top_k is not None:
@@ -578,8 +675,7 @@ def get_memories(args: JSON) -> JSON:
         visible = [
             memory
             for memory in items
-            if (include_expired or not _is_expired(memory))
-            and _matches(memory, values)
+            if (include_expired or not _is_expired(memory)) and _matches(memory, values)
         ]
         filtered_out = len(items) - len(visible)
         has_more = bool(result.get("has_more"))
@@ -587,9 +683,7 @@ def get_memories(args: JSON) -> JSON:
             **result,
             "results": visible,
             "count": (
-                len(visible)
-                if filtered_out
-                else int(result.get("total", len(visible)))
+                len(visible) if filtered_out else int(result.get("total", len(visible)))
             ),
             "complete": not has_more and not filtered_out,
             "truncated": has_more or bool(filtered_out),
@@ -616,13 +710,19 @@ def get_memories(args: JSON) -> JSON:
     items = result.get("results", result if isinstance(result, list) else [])
     if not isinstance(items, list):
         items = []
-    filtered = [m for m in items if (include_expired or not _is_expired(m)) and _matches(m, values)]
+    filtered = [
+        m
+        for m in items
+        if (include_expired or not _is_expired(m)) and _matches(m, values)
+    ]
     backend_list_limit_verified = True
     if fetch_limit > 0 and 1 < len(items) < fetch_limit:
         backend_list_limit_verified = _backend_honors_list_limit(query)
     suspected_backend_cap = fetch_limit > retry_limit > 0 and len(items) == retry_limit
     truncated = fetch_limit > 0 and (
-        len(items) >= fetch_limit or not backend_list_limit_verified or suspected_backend_cap
+        len(items) >= fetch_limit
+        or not backend_list_limit_verified
+        or suspected_backend_cap
     )
     extra: JSON = {
         "fetch_limit": fetch_limit,
@@ -640,7 +740,9 @@ def get_memories(args: JSON) -> JSON:
             f"retried with {fetch_limit}."
         )
     if not backend_list_limit_verified:
-        warnings.append("Backend did not honor top_k=1; listing completeness cannot be verified.")
+        warnings.append(
+            "Backend did not honor top_k=1; listing completeness cannot be verified."
+        )
     if suspected_backend_cap:
         warnings.append(
             f"Backend returned {len(items)} rows, which matched configured legacy cap {retry_limit}; "
@@ -715,7 +817,9 @@ def delete_all_memories(args: JSON) -> Any:
         if args.get(key)
     }
     if not scope:
-        raise ValueError("delete_all_memories requires user_id, agent_id, run_id, or app_id")
+        raise ValueError(
+            "delete_all_memories requires user_id, agent_id, run_id, or app_id"
+        )
 
     if _uses_sidecar():
         if scope.get("app_id") and not any(
@@ -773,7 +877,9 @@ def delete_all_memories(args: JSON) -> Any:
                 deleted.append(memory["id"])
         return {"message": f"Deleted {len(deleted)} memories", "deleted_ids": deleted}
 
-    query = {key: scope[key] for key in ("user_id", "agent_id", "run_id") if key in scope}
+    query = {
+        key: scope[key] for key in ("user_id", "agent_id", "run_id") if key in scope
+    }
     return _backend("DELETE", "/memories", query=query)
 
 
@@ -804,7 +910,8 @@ def list_entities(args: JSON) -> Any:
                             "type": entity_type,
                             "total_memories": int(row.get("memory_count") or 0),
                             "created_at": None,
-                            "updated_at": row.get("updated_at") or row.get("last_seen_at"),
+                            "updated_at": row.get("updated_at")
+                            or row.get("last_seen_at"),
                         }
                     )
                 total = int(result.get("total") or 0) if isinstance(result, dict) else 0
@@ -816,7 +923,11 @@ def list_entities(args: JSON) -> Any:
 
 
 def delete_entities(args: JSON) -> Any:
-    pairs = (("user", args.get("user_id")), ("agent", args.get("agent_id")), ("run", args.get("run_id")))
+    pairs = (
+        ("user", args.get("user_id")),
+        ("agent", args.get("agent_id")),
+        ("run", args.get("run_id")),
+    )
     if _uses_sidecar():
         app_id = args.get("app_id") or Config.default_app_id
         return {
@@ -837,7 +948,9 @@ def delete_entities(args: JSON) -> Any:
             ]
         }
     if args.get("app_id"):
-        raise ValueError("delete_entities(app_id) is not supported by mem0 OSS server; use delete_all_memories with user_id and app_id")
+        raise ValueError(
+            "delete_entities(app_id) is not supported by mem0 OSS server; use delete_all_memories with user_id and app_id"
+        )
     deleted = []
     for entity_type, entity_id in pairs:
         if entity_id:
@@ -887,24 +1000,101 @@ def tool_schema() -> list[JSON]:
         "metadata": {"type": "object"},
     }
     return [
-        {"name": "add_memory", "description": "Save text or conversation history.", "inputSchema": schema({"text": {"type": "string"}, "messages": {"type": "array"}, "infer": {"type": "boolean"}, "expiration_date": {"type": "string"}, **common})},
-        {"name": "search_memories", "description": "Semantic search across memories.", "inputSchema": schema({"query": {"type": "string"}, "top_k": {"type": "integer"}, "threshold": {"type": "number"}, **common}, ["query"])},
-        {"name": "get_memories", "description": "List memories with filters and pagination.", "inputSchema": schema({"page": {"type": "integer"}, "page_size": {"type": "integer"}, **common})},
-        {"name": "get_memory", "description": "Retrieve one memory by ID.", "inputSchema": schema({"id": {"type": "string"}}, ["id"])},
-        {"name": "update_memory", "description": "Update memory text or metadata.", "inputSchema": schema({"id": {"type": "string"}, "text": {"type": "string"}, "metadata": {"type": "object"}}, ["id"])},
-        {"name": "delete_memory", "description": "Delete one memory by ID.", "inputSchema": schema({"id": {"type": "string"}}, ["id"])},
-        {"name": "delete_all_memories", "description": "Delete memories in a specific scope.", "inputSchema": schema(common)},
-        {"name": "delete_entities", "description": "Delete user, agent, or run entities.", "inputSchema": schema(common)},
-        {"name": "list_entities", "description": "List user, agent, and run entities.", "inputSchema": schema({})},
-        {"name": "list_events", "description": "List local bridge memory events.", "inputSchema": schema({"page": {"type": "integer"}, "page_size": {"type": "integer"}})},
-        {"name": "get_event_status", "description": "Check local async event status.", "inputSchema": schema({"event_id": {"type": "string"}}, ["event_id"])},
+        {
+            "name": "add_memory",
+            "description": "Save text or conversation history.",
+            "inputSchema": schema(
+                {
+                    "text": {"type": "string"},
+                    "messages": {"type": "array"},
+                    "infer": {"type": "boolean"},
+                    "expiration_date": {"type": "string"},
+                    **common,
+                }
+            ),
+        },
+        {
+            "name": "search_memories",
+            "description": "Semantic search across memories.",
+            "inputSchema": schema(
+                {
+                    "query": {"type": "string"},
+                    "top_k": {"type": "integer"},
+                    "threshold": {"type": "number"},
+                    **common,
+                },
+                ["query"],
+            ),
+        },
+        {
+            "name": "get_memories",
+            "description": "List memories with filters and pagination.",
+            "inputSchema": schema(
+                {
+                    "page": {"type": "integer"},
+                    "page_size": {"type": "integer"},
+                    **common,
+                }
+            ),
+        },
+        {
+            "name": "get_memory",
+            "description": "Retrieve one memory by ID.",
+            "inputSchema": schema({"id": {"type": "string"}}, ["id"]),
+        },
+        {
+            "name": "update_memory",
+            "description": "Update memory text or metadata.",
+            "inputSchema": schema(
+                {
+                    "id": {"type": "string"},
+                    "text": {"type": "string"},
+                    "metadata": {"type": "object"},
+                },
+                ["id"],
+            ),
+        },
+        {
+            "name": "delete_memory",
+            "description": "Delete one memory by ID.",
+            "inputSchema": schema({"id": {"type": "string"}}, ["id"]),
+        },
+        {
+            "name": "delete_all_memories",
+            "description": "Delete memories in a specific scope.",
+            "inputSchema": schema(common),
+        },
+        {
+            "name": "delete_entities",
+            "description": "Delete user, agent, or run entities.",
+            "inputSchema": schema(common),
+        },
+        {
+            "name": "list_entities",
+            "description": "List user, agent, and run entities.",
+            "inputSchema": schema({}),
+        },
+        {
+            "name": "list_events",
+            "description": "List local bridge memory events.",
+            "inputSchema": schema(
+                {"page": {"type": "integer"}, "page_size": {"type": "integer"}}
+            ),
+        },
+        {
+            "name": "get_event_status",
+            "description": "Check local async event status.",
+            "inputSchema": schema({"event_id": {"type": "string"}}, ["event_id"]),
+        },
     ]
 
 
 def handle_rpc(message: JSON) -> JSON | None:
     msg_id = message.get("id")
     method = message.get("method")
-    params = message.get("params") or {}
+    params = message.get("params", {})
+    if not isinstance(method, str) or not isinstance(params, dict):
+        return _rpc_error(msg_id, -32600, "invalid request")
 
     if method == "initialize":
         return {
@@ -928,7 +1118,14 @@ def handle_rpc(message: JSON) -> JSON | None:
             return {
                 "jsonrpc": "2.0",
                 "id": msg_id,
-                "result": {"content": [{"type": "text", "text": json.dumps(result, default=_json_default)}]},
+                "result": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps(result, default=_json_default),
+                        }
+                    ]
+                },
             }
         except BackendError as exc:
             return _rpc_tool_error(msg_id, f"backend error {exc.status}: {exc.body}")
@@ -944,11 +1141,19 @@ def _rpc_error(msg_id: Any, code: int, message: str) -> JSON:
 
 
 def _rpc_tool_error(msg_id: Any, message: str) -> JSON:
-    return {"jsonrpc": "2.0", "id": msg_id, "result": {"isError": True, "content": [{"type": "text", "text": message}]}}
+    return {
+        "jsonrpc": "2.0",
+        "id": msg_id,
+        "result": {"isError": True, "content": [{"type": "text", "text": message}]},
+    }
 
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "mem0-oss-mcp"
+
+    def setup(self) -> None:
+        super().setup()
+        self.connection.settimeout(max(1.0, min(Config.timeout, 60.0)))
 
     def do_GET(self) -> None:
         if self.path == "/health":
@@ -958,8 +1163,11 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     _backend("GET", "/configure")
                 self._send_json({"status": "ok"})
-            except Exception as exc:
-                self._send_json({"status": "error", "error": str(exc)}, HTTPStatus.BAD_GATEWAY)
+            except Exception:
+                self._send_json(
+                    {"status": "error", "error": "backend unavailable"},
+                    HTTPStatus.BAD_GATEWAY,
+                )
             return
         self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
 
@@ -967,47 +1175,130 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.rstrip("/") != "/mcp":
             self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
             return
-        if not self._authorized():
-            self._send_json({"error": "unauthorized"}, HTTPStatus.UNAUTHORIZED)
+        authenticator = Config.authenticator
+        if authenticator is None:
+            self._send_json(
+                {"error": "authentication unavailable"},
+                HTTPStatus.SERVICE_UNAVAILABLE,
+            )
+            return
+        try:
+            principal = authenticator.authenticate(
+                self.headers.get("Authorization", "")
+            )
+        except Unauthorized:
+            self._send_json(
+                {"error": "unauthorized"},
+                HTTPStatus.UNAUTHORIZED,
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+            return
+        except AuthUnavailable:
+            self._send_json(
+                {"error": "authentication unavailable"},
+                HTTPStatus.SERVICE_UNAVAILABLE,
+            )
             return
 
-        try:
-            length = int(self.headers.get("Content-Length", "0"))
-            payload = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
-            if isinstance(payload, list):
-                responses = [r for item in payload if (r := handle_rpc(item)) is not None]
-                self._send_json(responses)
-            else:
-                response = handle_rpc(payload)
-                if response is None:
-                    self.send_response(HTTPStatus.ACCEPTED)
-                    self.end_headers()
+        with bind_http_principal(principal):
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                if length < 0:
+                    raise ValueError
+                if length > _MAX_MCP_REQUEST_BYTES:
+                    self._send_json(
+                        {"error": "request too large"},
+                        HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                    )
+                    return
+                payload = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+                if isinstance(payload, list):
+                    if not payload or len(payload) > _MAX_MCP_BATCH_ITEMS:
+                        self._send_json(
+                            _rpc_error(
+                                None,
+                                -32600,
+                                "invalid request",
+                            ),
+                            HTTPStatus.BAD_REQUEST,
+                        )
+                        return
+                    responses = [
+                        response
+                        for item in payload
+                        if (
+                            response := (
+                                handle_rpc(item)
+                                if isinstance(item, dict)
+                                else _rpc_error(
+                                    None,
+                                    -32600,
+                                    "invalid request",
+                                )
+                            )
+                        )
+                        is not None
+                    ]
+                    if responses:
+                        self._send_json(responses)
+                    else:
+                        self.send_response(HTTPStatus.ACCEPTED)
+                        self.end_headers()
+                elif not isinstance(payload, dict):
+                    self._send_json(
+                        _rpc_error(None, -32600, "invalid request"),
+                        HTTPStatus.BAD_REQUEST,
+                    )
                 else:
-                    self._send_json(response)
-        except json.JSONDecodeError:
-            self._send_json(_rpc_error(None, -32700, "parse error"), HTTPStatus.BAD_REQUEST)
+                    response = handle_rpc(payload)
+                    if response is None:
+                        self.send_response(HTTPStatus.ACCEPTED)
+                        self.end_headers()
+                    else:
+                        self._send_json(response)
+            except (ValueError, UnicodeDecodeError):
+                self._send_json(
+                    _rpc_error(None, -32700, "parse error"), HTTPStatus.BAD_REQUEST
+                )
 
-    def log_message(self, fmt: str, *args: Any) -> None:
-        print(f"{self.address_string()} - {fmt % args}", file=sys.stderr)
+    def log_message(self, format: str, *args: Any) -> None:
+        print(f"{self.address_string()} - {format % args}", file=sys.stderr)
 
-    def _authorized(self) -> bool:
-        if not Config.token:
-            return True
-        auth = self.headers.get("Authorization", "")
-        return auth == f"Bearer {Config.token}"
-
-    def _send_json(self, body: Any, status: HTTPStatus = HTTPStatus.OK) -> None:
+    def _send_json(
+        self,
+        body: Any,
+        status: HTTPStatus = HTTPStatus.OK,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         data = json.dumps(body, default=_json_default).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(data)
 
 
 def main() -> None:
+    try:
+        Config.authenticator = McpAuthenticator.from_env(Config.base_url)
+    except AuthConfigurationError as exc:
+        raise SystemExit(str(exc)) from None
     if Config.sidecar_required and not _uses_sidecar():
         raise SystemExit("MEM0_SIDECAR_REQUIRED=true requires MEM0_SIDECAR_BASE_URL")
+    if Config.sidecar_required and not Config.sidecar_api_key:
+        raise SystemExit("MEM0_SIDECAR_REQUIRED=true requires MEM0_SIDECAR_API_KEY")
+    _sidecar_healthy.clear()
+    if Config.sidecar_required:
+        try:
+            _send_sidecar_heartbeat()
+            _sidecar_healthy.set()
+        except Exception:
+            raise SystemExit(
+                "required sidecar authentication or readiness check failed"
+            ) from None
     httpd = ThreadingHTTPServer((Config.host, Config.port), Handler)
     heartbeat_stop = threading.Event()
     heartbeat_thread = None

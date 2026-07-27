@@ -15,14 +15,19 @@ MEM0_OSS_API_KEY=m0sk_xxx
 MEM0_SIDECAR_BASE_URL=http://mem0-platform-sidecar:8765
 MEM0_SIDECAR_PROJECT_ID=default
 MEM0_SIDECAR_REQUIRED=true
+# Required with the sidecar's secure default. This is the private operator
+# credential, not a dashboard-created client key.
+MEM0_SIDECAR_API_KEY=replace-with-private-operator-key
 # Optional; defaults to a per-process ID and a five-minute heartbeat.
 # MEM0_SIDECAR_INSTANCE_ID=mem0-oss-mcp-1
 # MEM0_SIDECAR_HEARTBEAT_INTERVAL_SECONDS=300
-# Optional when the sidecar itself requires an API key.
-# MEM0_SIDECAR_API_KEY=m0sk_xxx
 
 MEM0_OSS_MCP_HOST=0.0.0.0
 MEM0_OSS_MCP_PORT=8080
+# disabled | static | hybrid | core_api_key
+MEM0_OSS_MCP_AUTH_MODE=static
+MEM0_OSS_MCP_CLIENT_AUTH_URL=http://mem0:8000/auth/me
+MEM0_OSS_MCP_CLIENT_AUTH_TIMEOUT_SECONDS=5
 MEM0_OSS_MCP_TOKEN=change-me
 
 MEM0_OSS_DEFAULT_USER_ID=codex
@@ -40,6 +45,36 @@ Clients configure only the public MCP URL and bearer token. `MEM0_SIDECAR_*`
 variables are private bridge/operator settings and must not be copied into
 Codex, OpenCode, Cursor, Claude, Hermes, or other client configuration.
 
+### MCP client authentication
+
+| Mode | Accepted credentials | Intended use |
+| --- | --- | --- |
+| `disabled` | none | loopback-only development |
+| `static` | `MEM0_OSS_MCP_TOKEN` | backward-compatible deployments |
+| `hybrid` | legacy static token or Core API key | migration only |
+| `core_api_key` | any active Core admin API key | steady state |
+
+`static` and `hybrid` require a non-empty `MEM0_OSS_MCP_TOKEN`.
+When neither a mode nor a legacy token is configured, startup fails closed.
+`disabled` must be selected explicitly and requires `MEM0_OSS_MCP_HOST` to be
+a loopback address; there is no non-loopback override.
+`core_api_key` validates the incoming bearer credential through Core
+`/auth/me`; the MCP process receives no static shared secret. Core
+unavailability returns a sanitized 503, while an invalid or revoked key
+returns 401.
+
+Create one named Core admin API key per client in the dashboard's **Client Keys**
+page. Codex and OpenCode continue using `MEM0_OSS_MCP_TOKEN` as their local
+environment variable name, but its value becomes that client's `m0sk_...` key.
+The endpoint and MCP configuration remain unchanged.
+
+When sidecar routing is enabled with a trusted `MEM0_SIDECAR_API_KEY`, Requests
+attributes new rows as `Legacy shared MCP key` for `legacy_static` or by the
+Core key label and prefix for `core_api_key`. Without that private bridge
+credential, sidecar rejects caller-supplied attribution instead of trusting
+it. Historical rows created before attribution remain
+`Unknown (pre-attribution)`; they are never guessed or backfilled.
+
 When `MEM0_SIDECAR_BASE_URL` is set, all memory operations plus entity
 list/delete use the sidecar so its durable project/app index stays current.
 `MEM0_SIDECAR_PROJECT_ID` supplies the project boundary, while each tool call's
@@ -49,7 +84,9 @@ the caller and is never retried as a direct write, avoiding accidental
 double-writes.
 
 With sidecar routing enabled, the bridge reports a bounded read/write routing
-capability heartbeat at startup and every five minutes. Server-side
+capability heartbeat at startup, during health checks, and every five minutes.
+When `MEM0_SIDECAR_REQUIRED=true`, startup fails unless the private operator
+credential can call the protected heartbeat route. Server-side
 `AUTO_SAFE` consolidation requires a current heartbeat. Set
 `MEM0_SIDECAR_REQUIRED=true` in production so a missing sidecar URL fails at
 startup instead of silently selecting legacy direct mode.
@@ -68,9 +105,13 @@ Codex should connect to this bridge, not directly to Mem0 OSS:
 
 ```toml
 [mcp_servers.mem0]
-url = "http://<bridge-host>:8080/mcp"
+url = "https://<bridge-host>/mcp"
 bearer_token_env_var = "MEM0_OSS_MCP_TOKEN"
 ```
+
+The bridge itself does not terminate TLS. Keep its `0.0.0.0:8080` listener on
+a private application network and publish remote MCP only through an HTTPS
+reverse proxy or gateway.
 
 ## Codex plugin
 
@@ -81,7 +122,7 @@ To use the checked-in plugin, provide the bridge URL and bearer token in the
 Codex process environment, then add the marketplace and install the plugin:
 
 ```env
-MEM0_OSS_MCP_URL=http://<bridge-host>:8080/mcp
+MEM0_OSS_MCP_URL=https://<bridge-host>/mcp
 MEM0_OSS_MCP_TOKEN=change-me
 ```
 
@@ -101,7 +142,7 @@ not appear in process listings.
 ```bash
 printf '%s\n' "$MEM0_OSS_MCP_TOKEN" | \
   python3 plugins/mem0-oss/scripts/install_codex_plugin.py \
-  --url http://<bridge-host>:<bridge-port>/mcp \
+  --url https://<bridge-host>/mcp \
   --token-stdin \
   --install
 ```
@@ -124,7 +165,7 @@ git submodule update --init --depth 1 third_party/mem0
 
 printf '%s\n' "$MEM0_OSS_MCP_TOKEN" | \
   python3 plugins/mem0-oss/scripts/install_codex_plugin.py \
-  --url http://<bridge-host>:<bridge-port>/mcp \
+  --url https://<bridge-host>/mcp \
   --token-stdin \
   --token-env-var MEM0_OSS_MCP_TOKEN \
   --with-hooks \
@@ -180,7 +221,7 @@ git submodule update --init --depth 1 third_party/mem0
 
 printf '%s\n' "$MEM0_OSS_MCP_TOKEN" | \
   python3 plugins/mem0-oss/scripts/install_opencode_plugin.py \
-  --url http://<bridge-host>:<bridge-port>/mcp \
+  --url https://<bridge-host>/mcp \
   --token-stdin \
   --install
 ```

@@ -6,7 +6,7 @@ The repository copy is environment-driven. It starts the bundled stdio bridge
 and expects the Codex process to provide the bridge URL and bearer token:
 
 ```env
-MEM0_OSS_MCP_URL=http://<bridge-host>:8080/mcp
+MEM0_OSS_MCP_URL=https://<bridge-host>/mcp
 MEM0_OSS_MCP_TOKEN=change-me
 ```
 
@@ -24,7 +24,7 @@ the token from stdin so it does not appear in process listings:
 ```bash
 printf '%s\n' "$MEM0_OSS_MCP_TOKEN" | \
   python3 plugins/mem0-oss/scripts/install_codex_plugin.py \
-  --url http://<bridge-host>:<bridge-port>/mcp \
+  --url https://<bridge-host>/mcp \
   --token-stdin \
   --install
 ```
@@ -36,7 +36,7 @@ or `--token` are stored in
 permissions. You can still pass `--env-file /path/to/bridge.env` to choose the
 dotenv location yourself.
 
-If you omit `--env-file`, the installer preserves the direct HTTP MCP config
+If you omit `--env-file`, the installer preserves the direct MCP HTTP transport
 and Codex must receive `MEM0_OSS_MCP_TOKEN` in its process environment before a
 new thread starts.
 
@@ -48,7 +48,7 @@ git submodule update --init --depth 1 third_party/mem0
 
 printf '%s\n' "$MEM0_OSS_MCP_TOKEN" | \
   python3 plugins/mem0-oss/scripts/install_codex_plugin.py \
-  --url http://<bridge-host>:<bridge-port>/mcp \
+  --url https://<bridge-host>/mcp \
   --with-hooks \
   --token-stdin \
   --install
@@ -89,7 +89,7 @@ git submodule update --init --depth 1 third_party/mem0
 
 printf '%s\n' "$MEM0_OSS_MCP_TOKEN" | \
   python3 plugins/mem0-oss/scripts/install_opencode_plugin.py \
-  --url http://<bridge-host>:<bridge-port>/mcp \
+  --url https://<bridge-host>/mcp \
   --token-stdin \
   --install
 ```

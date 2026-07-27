@@ -256,7 +256,7 @@ def write_oss_adapter(source_root: Path, plugin_root: Path) -> None:
 def update_package_json(plugin_root: Path, plugin_name: str, display_name: str) -> None:
     package_path = plugin_root / "package.json"
     package = load_json(package_path)
-    base_version = str(package.get("version", "0.1.2")).split("+", 1)[0]
+    base_version = str(package.get("version", "0.1.3")).split("+", 1)[0]
     cachebuster = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
 
     package["name"] = f"@mem0-oss/{plugin_name}-opencode-plugin"
@@ -367,7 +367,11 @@ def install_local_loader(plugin_root: Path, plugin_name: str, opencode_dir: Path
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--url", required=True, help="Absolute bridge endpoint, for example http://host:8080/mcp")
+    parser.add_argument(
+        "--url",
+        required=True,
+        help="Absolute bridge endpoint, for example https://mem0.example.com/mcp",
+    )
     parser.add_argument("--name", default=DEFAULT_PLUGIN_NAME, help="Generated plugin id, default: mem0-oss")
     parser.add_argument("--display-name", help="Display name used in generated package metadata")
     parser.add_argument("--token-env-var", default=DEFAULT_TOKEN_ENV_VAR, help="Bearer token env var name")
