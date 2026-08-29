@@ -277,6 +277,32 @@ class MappingTests(unittest.TestCase):
 
         self.assertEqual(captured["body"]["app_id"], "repo")
 
+    def test_sidecar_search_omits_empty_entity_filters(self):
+        captured = {}
+
+        def fake_sidecar(method, path, body=None, query=None):
+            captured.update({"method": method, "path": path, "body": body})
+            return {"results": []}
+
+        with (
+            patch.object(server.Config, "sidecar_base_url", "http://sidecar.internal"),
+            patch.object(server, "_sidecar_backend", side_effect=fake_sidecar),
+        ):
+            server.search_memories(
+                {
+                    "query": "q",
+                    "user_id": "root",
+                    "agent_id": "",
+                    "run_id": "",
+                    "app_id": "repo",
+                }
+            )
+
+        self.assertEqual(
+            captured["body"]["filters"],
+            {"user_id": "root", "app_id": "repo"},
+        )
+
     def test_sidecar_search_unwraps_eq_app_filter_for_scope(self):
         captured = {}
 
