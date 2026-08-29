@@ -597,7 +597,7 @@ def search_memories(args: JSON) -> Any:
             body[key] = args[key]
 
     for key in ("user_id", "agent_id", "run_id", "app_id"):
-        if args.get(key) is not None:
+        if args.get(key):
             body["filters"].setdefault(key, args[key])
 
     if _uses_sidecar():
