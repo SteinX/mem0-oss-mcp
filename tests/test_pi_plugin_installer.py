@@ -198,6 +198,9 @@ def test_credentials_inside_package_are_rejected(
         "http://[::1",
         "http://mem0\\host",
         "http://mem0.\ttest",
+        "http://foo％bar",
+        "http://%EF%BC%8F.test",
+        "http://mem0%7F.test",
     ],
 )
 def test_invalid_url_does_not_create_target(

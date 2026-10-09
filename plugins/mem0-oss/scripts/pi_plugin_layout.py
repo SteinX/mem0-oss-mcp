@@ -29,7 +29,7 @@ class Connection:
 def _valid_rest_authority(url: ParseResult) -> bool:
     hostname = unquote(url.hostname or "", errors="strict")
     if not hostname or any(
-        char.isspace() or ord(char) < 32 or char in "%#/:<>?@[\\]^|"
+        char.isspace() or ord(char) < 32 or ord(char) == 127 or char in "%#/:<>?@[\\]^|"
         for char in hostname.replace(":", "")
     ):
         return False
@@ -45,6 +45,14 @@ def _valid_rest_authority(url: ParseResult) -> bool:
         return False
     else:
         ascii_host = hostname.encode("idna").decode("ascii").rstrip(".")
+        if any(
+            char.isspace()
+            or ord(char) < 32
+            or ord(char) == 127
+            or char in "%#/:<>?@[\\]^|"
+            for char in ascii_host
+        ):
+            return False
         last = ascii_host.rsplit(".", 1)[-1]
         if last.isdecimal() or re.fullmatch(r"0[xX][0-9a-fA-F]+", last):
             IPv4Address(ascii_host)
