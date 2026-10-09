@@ -120,6 +120,33 @@ def admin_principal():
     )
 
 
+@pytest.mark.parametrize("idempotency_key", [None, "fixture-add-key"])
+def test_authenticated_add_without_operator_key_does_not_persist(idempotency_key):
+    arguments = {"text": "fixture memory"}
+    if idempotency_key is not None:
+        arguments["idempotency_key"] = idempotency_key
+    with (
+        patch.object(server.Config, "sidecar_api_key", ""),
+        patch.dict(server.EVENTS, {}, clear=True),
+        patch.object(
+            server, "_sidecar_backend", return_value={"memory": {"id": "persisted"}}
+        ) as write,
+        running_server(
+            StubAuthenticator(admin_principal()), sidecar_base_url="http://sidecar.test"
+        ) as base_url,
+    ):
+        status, body = post_payload(
+            base_url,
+            {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+             "params": {"name": "add_memory", "arguments": arguments}},
+        )
+        write.assert_not_called()
+        assert server.EVENTS == {}
+    assert status == 200
+    assert body["result"]["isError"] is True
+    assert "503" in json.dumps(body["result"])
+
+
 def test_authenticated_request_reaches_json_rpc():
     authenticator = StubAuthenticator(
         AuthPrincipal(

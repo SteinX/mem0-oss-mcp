@@ -571,6 +571,10 @@ def add_memory(args: JSON) -> JSON:
             body[key] = args[key]
 
     if _uses_sidecar():
+        if current_http_principal() is not None and not Config.sidecar_api_key:
+            raise BackendError(
+                503, "authenticated Sidecar writes require MEM0_SIDECAR_API_KEY"
+            )
         result = _sidecar_backend(
             "POST",
             "/v3/memories/add",

@@ -224,6 +224,7 @@ def test_replaying_another_credentials_add_does_not_take_event_ownership() -> No
     with (
         patch.dict(server.EVENTS, {}, clear=True),
         patch.object(server.Config, "sidecar_base_url", "http://sidecar.test"),
+        patch.object(server.Config, "sidecar_api_key", "fixture-operator-key"),
         patch.object(
             server,
             "_sidecar_backend",
@@ -247,6 +248,7 @@ def test_replaying_another_credentials_add_does_not_take_event_ownership() -> No
             )
         ),
     ):
-        with pytest.raises(server.BackendError):
+        with pytest.raises(server.BackendError) as denied:
             server.add_memory({"text": "packet", "idempotency_key": "prior-packet"})
+        assert denied.value.status == 404
         assert "prior-event" not in server.EVENTS
