@@ -20,9 +20,12 @@ process.env.MEM0_USER_ID = user;
 process.env.MEM0_TELEMETRY = "false";
 
 type WireCall = { readonly method: string; readonly path: string; readonly body: Record<string, unknown>; readonly query: URLSearchParams };
-type Row = { readonly id: string; readonly memory: string; readonly metadata: Record<string, string> };
+type Row = { readonly id: string; readonly memory: string; readonly metadata: Record<string, string> | null; readonly created_at?: string | null; readonly score?: number | null };
 const calls: WireCall[] = [];
-const rows: Row[] = [{ id: "foreign", memory: "other project", metadata: { app_id: "other-project" } }];
+const rows: Row[] = [
+  { id: "foreign", memory: "other project", metadata: { app_id: "other-project" } },
+  { id: "legacy-global", memory: "legacy global fact", metadata: null, created_at: null, score: null },
+];
 let rejectRequests = false;
 let invalidSearch = false;
 let saturatedList = false;
@@ -43,7 +46,7 @@ const fixture = live ? undefined : Bun.serve({
     if (url.pathname === "/search") {
       return Response.json({ results: invalidSearch ? [{ memory: "invalid" }] : rows.filter((row) => {
         assert(isRecord(body["filters"]));
-        return !body["filters"]["app_id"] || row.metadata["app_id"] === body["filters"]["app_id"];
+        return !body["filters"]["app_id"] || row.metadata?.["app_id"] === body["filters"]["app_id"];
       }) });
     }
     if (url.pathname === "/memories" && request.method === "GET") {
@@ -118,18 +121,21 @@ try {
     const scoped = calls.at(-1)?.body["filters"];
     assert(isRecord(scoped) && typeof scoped["run_id"] === "string");
     await session.prompt("/mem0-scope project");
-    const own = rows.find((row) => row.metadata["app_id"] === app);
+    const own = rows.find((row) => row.metadata?.["app_id"] === app);
     assert(own);
     await tool.execute("qa", { action: "update", memory_id: own.id, content: "updated fact" }, undefined, undefined, context);
     const listed = await tool.execute("qa", { action: "get_all" }, undefined, undefined, context);
     assert(textOf(listed).includes("updated fact") && !textOf(listed).includes("other project"));
+    await session.prompt("/mem0-scope global");
+    assert(textOf(await tool.execute("qa", { action: "get_all" }, undefined, undefined, context)).includes("legacy global fact"));
+    await session.prompt("/mem0-scope project");
     saturatedList = true;
     const before = calls.filter((call) => call.method === "DELETE").length;
     await assert.rejects(tool.execute("qa", { action: "delete_all" }, undefined, undefined, context), /truncated/);
     assert.equal(calls.filter((call) => call.method === "DELETE").length, before);
     saturatedList = false;
     await tool.execute("qa", { action: "delete_all" }, undefined, undefined, context);
-    assert.deepEqual(rows.map((row) => row.id), ["foreign"]);
+    assert.deepEqual(rows.map((row) => row.id), ["foreign", "legacy-global"]);
     assert(calls.some((call) => call.query.get("show_expired") === "true"));
     invalidSearch = true;
     await assert.rejects(tool.execute("qa", { action: "search", query: "fixture" }, undefined, undefined, context), /results array/);

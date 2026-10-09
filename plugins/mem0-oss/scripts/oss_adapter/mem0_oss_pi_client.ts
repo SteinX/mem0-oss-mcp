@@ -22,9 +22,9 @@ interface Memory {
   readonly id: string;
   readonly memory?: string;
   readonly event?: string;
-  readonly score?: number;
-  readonly created_at?: string;
-  readonly metadata?: Record<string, unknown>;
+  readonly score?: number | null;
+  readonly created_at?: string | null;
+  readonly metadata?: Record<string, unknown> | null;
 }
 
 class Mem0RestError extends Error {
@@ -41,10 +41,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function isMemory(value: unknown): value is Memory {
   return isRecord(value) && typeof value["id"] === "string"
     && (value["memory"] === undefined || typeof value["memory"] === "string")
-    && (value["score"] === undefined || typeof value["score"] === "number")
-    && (value["created_at"] === undefined || typeof value["created_at"] === "string")
+    && (value["score"] === undefined || value["score"] === null || typeof value["score"] === "number")
+    && (value["created_at"] === undefined || value["created_at"] === null || typeof value["created_at"] === "string")
     && (value["event"] === undefined || typeof value["event"] === "string")
-    && (value["metadata"] === undefined || isRecord(value["metadata"]));
+    && (value["metadata"] === undefined || value["metadata"] === null || isRecord(value["metadata"]));
 }
 
 function memories(response: unknown): Memory[] {
