@@ -29,7 +29,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.release.tag_name || github.sha }}
+          ref: ${{ env.RELEASE_TAG || github.sha }}
           persist-credentials: false
 
       - name: Verify publication source

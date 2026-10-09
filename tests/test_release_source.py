@@ -91,6 +91,6 @@ def test_manual_verifier_binds_to_dispatch_sha(
 
 def test_workflow_verifies_source_before_publish_credentials() -> None:
     workflow = WORKFLOW.read_text()
-    assert "ref: ${{ github.event.release.tag_name || github.sha }}" in workflow
+    assert "ref: ${{ env.RELEASE_TAG || github.sha }}" in workflow
     assert "persist-credentials: false" in workflow
     assert workflow.index("id: source") < workflow.index("- name: Log in to GHCR")
