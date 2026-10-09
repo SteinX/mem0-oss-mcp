@@ -1,4 +1,5 @@
 export { initializeMem0OssEnv } from "./mem0_oss_pi_env.ts";
+import { validateRestBaseUrl } from "./mem0_oss_pi_env.ts";
 
 export interface SearchMemoryOptions {
   readonly filters?: Record<string, string>;
@@ -77,7 +78,7 @@ export default class PiMemoryClient {
 
   constructor(options: { readonly apiKey: string }) {
     this.apiKey = options.apiKey;
-    this.baseUrl = (process.env.MEM0_OSS_BASE_URL || "").replace(/\/+$/, "");
+    this.baseUrl = validateRestBaseUrl(process.env.MEM0_OSS_BASE_URL || "");
     if (!this.baseUrl || !this.apiKey) throw new Mem0RestError("Mem0 OSS base URL and API key are required");
     this.listLimit = Number(process.env.MEM0_OSS_LIST_FETCH_LIMIT || "1000");
     if (!Number.isInteger(this.listLimit) || this.listLimit <= 0) {

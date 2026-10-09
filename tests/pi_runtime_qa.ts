@@ -84,6 +84,26 @@ if (fixture) {
   const envFile = join(agentDir, "key.env");
   writeFileSync(envFile, "MEM0_OSS_API_KEY='fixture-'\"'\"'secret'\n", { mode: 0o600 });
   process.env.MEM0_OSS_ENV_FILE = envFile;
+  const blocked = await createAgentSession({ cwd, agentDir, sessionManager: SessionManager.inMemory(cwd) });
+  try {
+    assert(blocked.extensionsResult.errors.some((error) => error.error.includes("different origin")),
+      "Conflicting endpoint must not load the installed private-file key");
+    assert.equal(process.env.MEM0_API_KEY, undefined);
+    assert.equal(calls.length, 0, "Conflicting origin received a request");
+  } finally {
+    blocked.session.dispose();
+  }
+  delete process.env.MEM0_OSS_BASE_URL;
+  const fromFile = await createAgentSession({ cwd, agentDir, sessionManager: SessionManager.inMemory(cwd) });
+  try {
+    assert.equal(fromFile.extensionsResult.errors.length, 0);
+    assert.equal(process.env.MEM0_API_KEY, "fixture-'secret");
+    assert.equal(calls.length, 0);
+  } finally {
+    fromFile.session.dispose();
+  }
+  process.env.MEM0_OSS_API_KEY = process.env.MEM0_API_KEY;
+  process.env.MEM0_OSS_BASE_URL = `http://127.0.0.1:${fixture.port}`;
 }
 
 const { session } = await createAgentSession({ cwd, agentDir, sessionManager: SessionManager.inMemory(cwd) });
@@ -170,7 +190,7 @@ try {
     await assert.rejects(tool.execute("qa", { action: "search", query: "fixture" }, undefined, undefined, context), /HTTP 401/);
     rejectRequests = false;
     console.log(JSON.stringify({ mode: "fixture", transport: "REST", pi: "1.1.0", requests: calls.length,
-      recall: "passed", capture: "passed", scopes: "passed", crud: "passed", failures: "passed", project_delete: "isolated", id_mutations: "scoped" }));
+      recall: "passed", capture: "passed", scopes: "passed", crud: "passed", failures: "passed", project_delete: "isolated", id_mutations: "scoped", origin_override: "blocked" }));
   } else {
     const marker = `Pi direct OSS canary ${user}`;
     try {

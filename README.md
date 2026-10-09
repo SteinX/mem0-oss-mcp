@@ -295,7 +295,10 @@ printf '%s\n' "$MEM0_OSS_API_KEY" | \
 Pi calls the Mem0 OSS REST API directly with `X-API-Key`. It does not require an
 MCP server, sidecar, `mem0ai`, or a cloud account. Supply the Core API base URL,
 without `/mcp` or `/v1`. `MEM0_OSS_BASE_URL` can override the generated endpoint
-at runtime. Keep the Core endpoint reachable from Pi; a reverse proxy may route
+at runtime. A different origin requires an explicit runtime API key; the
+installed private-file key is only loaded for the configured origin. Runtime
+URLs receive the same REST URL validation as the installer. Keep the Core
+endpoint reachable from Pi; a reverse proxy may route
 the same REST paths through a sidecar, so select the actual Core endpoint when
 you want direct Core access.
 

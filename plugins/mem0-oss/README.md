@@ -128,4 +128,6 @@ Use the Core REST base URL without `/mcp` or `/v1`, and a Core API key rather
 than an MCP bearer token. `--install` preserves other Pi settings and registers
 the generated package once. `--no-build` uses Pi's TypeScript loading. API keys
 remain in an owner-only env file outside the generated package. Runtime
-`MEM0_OSS_BASE_URL` and `MEM0_OSS_API_KEY` can override the connection.
+`MEM0_OSS_BASE_URL` and `MEM0_OSS_API_KEY` can override the connection. Supply
+an explicit runtime key when changing origin; the installed private-file key
+is restricted to its configured origin.
