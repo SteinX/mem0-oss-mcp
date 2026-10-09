@@ -10,24 +10,20 @@ from __future__ import annotations
 
 import argparse
 import os
-import re
 import shutil
 import stat
 import subprocess
 import sys
 from contextlib import ExitStack
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Final
 from urllib.parse import urlparse
 
 from install_opencode_plugin import (
     copy_adapter_file,
     copy_plugin,
     env_file_from_args,
-    js_literal,
     load_json,
     normalize_name,
     plugin_root_from_script,
@@ -39,13 +35,7 @@ from install_opencode_plugin import (
     validate_token_value,
 )
 
-ENTRY_ANCHOR: Final = "  const config = loadConfig();"
-
-
-class InstallerError(ValueError):
-    def __init__(self, reason: str) -> None:
-        self.reason = reason
-        super().__init__(reason)
+from pi_plugin_layout import Connection, InstallerError, patch_sources, validate_source
 
 
 class Arguments(argparse.Namespace):
@@ -57,95 +47,28 @@ class Arguments(argparse.Namespace):
     env_file: Path | None = None
     target_root: Path = Path.home() / ".mem0-oss/pi-plugins"
     upstream_plugin_dir: Path = repo_root_from_script() / "third_party/mem0"
-    pi_dir: Path = Path(os.environ.get("PI_CODING_AGENT_DIR", Path.home() / ".pi/agent"))
+    pi_dir: Path = Path(
+        os.environ.get("PI_CODING_AGENT_DIR", Path.home() / ".pi/agent")
+    )
     no_build: bool = False
     install: bool = False
-
-
-@dataclass(frozen=True, slots=True)
-class Connection:
-    url: str
-    api_key_env_var: str
-    env_file: Path | None
 
 
 def validate_rest_url(value: str) -> str:
     url = urlparse(value.strip())
     if url.scheme not in {"http", "https"} or not url.netloc:
         raise InstallerError("--url must be an absolute http(s) URL")
-    if url.username or url.password or url.query or url.fragment or url.path.rstrip("/").endswith("/mcp"):
-        raise InstallerError("--url must be an OSS REST base URL without credentials, query, fragment or /mcp")
-    return value.strip().rstrip("/")
-
-
-def validate_source(path: Path) -> Path:
-    root = path.expanduser().resolve()
-    source = root if (root / "src/entry.ts").is_file() else root / "integrations/pi-agent-plugin"
-    core = source.parent / "agent-plugin-core/typescript/src"
-    if not (core / "lifecycle.ts").is_file():
-        raise InstallerError("Pi plugin shared core missing; use a Mem0 checkout with pi-agent-plugin 0.3.2 or later")
-    entry = source / "src/entry.ts"
-    if not (source / "package.json").is_file() or not entry.is_file():
-        raise InstallerError(f"not a Mem0 Pi plugin source directory: {path}")
-    if ENTRY_ANCHOR not in entry.read_text(encoding="utf-8"):
-        raise InstallerError("Pi plugin entry does not contain the expected config initialization")
-    return source
-
-
-def patch_sources(plugin: Path, connection: Connection) -> None:
-    for path in (plugin / "src").rglob("*.ts"):
-        content = path.read_text(encoding="utf-8")
-        client = os.path.relpath(plugin / "mem0_oss_pi_client.ts", path.parent)
-        core = os.path.relpath(plugin / "src/agent-plugin-core", path.parent)
-        if not core.startswith("."):
-            core = "./" + core
-        content = re.sub(r'(["\'])mem0ai\1', lambda _: f'"{client}"', content)
-        content = re.sub(
-            r'(["\'])(?:\.\./)+agent-plugin-core/typescript/src/',
-            lambda match: f"{match[1]}{core}/",
-            content,
+    if (
+        url.username
+        or url.password
+        or url.query
+        or url.fragment
+        or url.path.rstrip("/").endswith("/mcp")
+    ):
+        raise InstallerError(
+            "--url must be an OSS REST base URL without credentials, query, fragment or /mcp"
         )
-        path.write_text(content, encoding="utf-8")
-    entry = plugin / "src/entry.ts"
-    content = entry.read_text(encoding="utf-8")
-    init = (
-        "  initializeMem0OssEnv({\n"
-        f"    url: {js_literal(connection.url)},\n"
-        f"    apiKeyEnvVar: {js_literal(connection.api_key_env_var)},\n"
-        f"    envFile: {js_literal(str(connection.env_file) if connection.env_file else None)},\n"
-        "  });\n"
-    )
-    content = 'import { initializeMem0OssEnv } from "../mem0_oss_pi_client.ts";\n' + content
-    entry.write_text(content.replace(ENTRY_ANCHOR, init + ENTRY_ANCHOR, 1), encoding="utf-8")
-    config = plugin / "src/config/index.ts"
-    content = config.read_text(encoding="utf-8").replace(
-        'const AGENT_ROOT = path.join(os.homedir(), ".pi", "agent");',
-        'const AGENT_ROOT = process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent");',
-    )
-    config.write_text(content, encoding="utf-8")
-    mutations = (
-        (
-            "memory/tools.ts",
-            "mem0.update(memoryId, { text: params.content })",
-            "mem0.update(memoryId, { text: params.content, filters: resolveSearchFilters(scope, scopeCtx) })",
-        ),
-        (
-            "memory/tools.ts",
-            "mem0.delete(normalizeMemoryId(params.memory_id))",
-            "mem0.delete(normalizeMemoryId(params.memory_id), { filters: resolveSearchFilters(scope, scopeCtx) })",
-        ),
-        (
-            "commands.ts",
-            "mem0.delete(target.id)",
-            "mem0.delete(target.id, { filters: resolveSearchFilters(config.defaultScope, getScopeCtx()) })",
-        ),
-    )
-    for relative, before, after in mutations:
-        path = plugin / "src" / relative
-        content = path.read_text(encoding="utf-8")
-        if before not in content:
-            raise InstallerError(f"unsupported Pi mutation site in {relative}")
-        path.write_text(content.replace(before, after), encoding="utf-8")
+    return value.strip().rstrip("/")
 
 
 def parse_args() -> Arguments:
@@ -159,13 +82,26 @@ def parse_args() -> Arguments:
         action="store_true",
         help="Read API key from stdin into a private env file",
     )
-    tokens.add_argument("--api-key", help="API key value; prefer --api-key-stdin to avoid process listings")
+    tokens.add_argument(
+        "--api-key",
+        help="API key value; prefer --api-key-stdin to avoid process listings",
+    )
     parser.add_argument("--env-file", type=Path)
     parser.add_argument("--target-root", type=Path, default=Arguments.target_root)
-    parser.add_argument("--upstream-plugin-dir", type=Path, default=Arguments.upstream_plugin_dir)
+    parser.add_argument(
+        "--upstream-plugin-dir", type=Path, default=Arguments.upstream_plugin_dir
+    )
     parser.add_argument("--pi-dir", type=Path, default=Arguments.pi_dir)
-    parser.add_argument("--no-build", action="store_true", help="Load source directly; Pi supplies host dependencies")
-    parser.add_argument("--install", action="store_true", help="Register the package in Pi settings.json")
+    parser.add_argument(
+        "--no-build",
+        action="store_true",
+        help="Load source directly; Pi supplies host dependencies",
+    )
+    parser.add_argument(
+        "--install",
+        action="store_true",
+        help="Register the package in Pi settings.json",
+    )
     return parser.parse_args(namespace=Arguments())
 
 
@@ -176,7 +112,9 @@ def main() -> int:
     base = args.target_root.expanduser().resolve()
     target = base / name
     if target == source or source in target.parents or target in source.parents:
-        raise InstallerError("target root must not overlap the upstream source directory")
+        raise InstallerError(
+            "target root must not overlap the upstream source directory"
+        )
     token = None
     if args.api_key_stdin:
         token = validate_token_value(sys.stdin.read())
@@ -185,21 +123,33 @@ def main() -> int:
     env_file = env_file_from_args(args.env_file, base, name, token)
     validate_env_file(env_file, allow_missing=token is not None)
     if env_file is not None and (env_file == target or target in env_file.parents):
-        raise InstallerError("credential env file must be outside the generated package")
-    connection = Connection(validate_rest_url(args.url), validate_env_var(args.api_key_env_var), env_file)
+        raise InstallerError(
+            "credential env file must be outside the generated package"
+        )
+    connection = Connection(
+        validate_rest_url(args.url), validate_env_var(args.api_key_env_var), env_file
+    )
     settings_path = args.pi_dir.expanduser().resolve() / "settings.json"
-    settings = load_json(settings_path) if args.install and settings_path.exists() else {}
+    settings = (
+        load_json(settings_path) if args.install and settings_path.exists() else {}
+    )
     packages = settings.get("packages", [])
     if not isinstance(packages, list):
         raise InstallerError("Pi settings packages must be a list")
     if args.install:
         if not any(
-            entry == str(target) or isinstance(entry, dict) and entry.get("source") == str(target) for entry in packages
+            entry == str(target)
+            or isinstance(entry, dict)
+            and entry.get("source") == str(target)
+            for entry in packages
         ):
             packages.append(str(target))
         settings["packages"] = packages
     base.mkdir(parents=True, exist_ok=True)
-    with TemporaryDirectory(prefix=f".{name}-", dir=base) as staging_dir, ExitStack() as cleanup:
+    with (
+        TemporaryDirectory(prefix=f".{name}-", dir=base) as staging_dir,
+        ExitStack() as cleanup,
+    ):
         staging = Path(staging_dir) / "plugin"
         copy_plugin(source, staging)
         shutil.copytree(
@@ -215,7 +165,9 @@ def main() -> int:
         package.update(name=f"@mem0-oss/{name}-pi-plugin", private=True)
         package["version"] = str(package["version"]).split("+", 1)[0] + f"+oss.{stamp}"
         package.get("dependencies", {}).pop("mem0ai", None)
-        package["pi"]["extensions"] = ["./src/entry.ts" if args.no_build else "./dist/entry.js"]
+        package["pi"]["extensions"] = [
+            "./src/entry.ts" if args.no_build else "./dist/entry.js"
+        ]
         write_json(staging / "package.json", package)
         if not args.no_build:
             subprocess.run(
@@ -227,14 +179,26 @@ def main() -> int:
         staged_settings = None
         if args.install:
             settings_path.parent.mkdir(parents=True, exist_ok=True)
-            settings_dir = cleanup.enter_context(TemporaryDirectory(prefix=".mem0-settings-", dir=settings_path.parent))
+            settings_dir = cleanup.enter_context(
+                TemporaryDirectory(prefix=".mem0-settings-", dir=settings_path.parent)
+            )
             staged_settings = Path(settings_dir) / "settings.json"
             write_json(staged_settings, settings)
-            staged_settings.chmod(stat.S_IMODE(settings_path.stat().st_mode) if settings_path.exists() else 0o600)
+            staged_settings.chmod(
+                stat.S_IMODE(settings_path.stat().st_mode)
+                if settings_path.exists()
+                else 0o600
+            )
         previous_key = (
-            env_file.read_bytes() if token is not None and env_file is not None and env_file.exists() else None
+            env_file.read_bytes()
+            if token is not None and env_file is not None and env_file.exists()
+            else None
         )
-        previous_mode = stat.S_IMODE(env_file.stat().st_mode) if env_file is not None and env_file.exists() else 0o600
+        previous_mode = (
+            stat.S_IMODE(env_file.stat().st_mode)
+            if env_file is not None and env_file.exists()
+            else 0o600
+        )
         backup = target.with_name(f"{name}.backup.{stamp}") if target.exists() else None
         promoted = False
         try:

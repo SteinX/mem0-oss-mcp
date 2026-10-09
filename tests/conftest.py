@@ -1,0 +1,48 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+
+@pytest.fixture
+def pi_upstream(tmp_path: Path) -> Path:
+    root = tmp_path / "upstream"
+    plugin = root / "integrations/pi-agent-plugin"
+    (plugin / "src/config").mkdir(parents=True)
+    (plugin / "skills/search").mkdir(parents=True)
+    (plugin / "skills/search/SKILL.md").write_text("---\nname: search\n---\n")
+    (plugin / "package.json").write_text(
+        json.dumps(
+            {
+                "name": "@mem0/pi-agent-plugin",
+                "version": "0.3.2",
+                "type": "module",
+                "pi": {"extensions": ["./dist/entry.js"], "skills": ["./skills"]},
+                "dependencies": {"mem0ai": "^3.0.7"},
+            }
+        )
+    )
+    (plugin / "src/entry.ts").write_text("""import MemoryClient from "mem0ai";
+import { loadConfig } from "./config/index.ts";
+import { shared } from "../../agent-plugin-core/typescript/src/lifecycle.ts";
+export default function extension() {
+  const config = loadConfig();
+  return new MemoryClient({ apiKey: config.apiKey });
+}
+""")
+    (plugin / "src/config/index.ts").write_text("""import * as os from "node:os";
+import * as path from "node:path";
+const AGENT_ROOT = path.join(os.homedir(), ".pi", "agent");
+export function loadConfig() { return {apiKey: process.env.MEM0_API_KEY}; }
+""")
+    (plugin / "src/memory").mkdir()
+    (plugin / "src/memory/tools.ts").write_text(
+        "mem0.update(memoryId, { text: params.content });\nmem0.delete(normalizeMemoryId(params.memory_id));\n"
+    )
+    (plugin / "src/commands.ts").write_text("mem0.delete(target.id);\n")
+    core = root / "integrations/agent-plugin-core/typescript/src"
+    core.mkdir(parents=True)
+    (core / "lifecycle.ts").write_text("export const shared = true;\n")
+    return root

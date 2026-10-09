@@ -11,52 +11,15 @@ from pathlib import Path
 
 import pytest
 
-INSTALLER = Path(__file__).resolve().parents[1] / "plugins/mem0-oss/scripts/install_pi_plugin.py"
+INSTALLER = (
+    Path(__file__).resolve().parents[1]
+    / "plugins/mem0-oss/scripts/install_pi_plugin.py"
+)
 
 
-@pytest.fixture
-def upstream(tmp_path: Path) -> Path:
-    root = tmp_path / "upstream"
-    plugin = root / "integrations/pi-agent-plugin"
-    (plugin / "src/config").mkdir(parents=True)
-    (plugin / "skills/search").mkdir(parents=True)
-    (plugin / "skills/search/SKILL.md").write_text("---\nname: search\n---\n")
-    (plugin / "package.json").write_text(
-        json.dumps(
-            {
-                "name": "@mem0/pi-agent-plugin",
-                "version": "0.3.2",
-                "type": "module",
-                "pi": {"extensions": ["./dist/entry.js"], "skills": ["./skills"]},
-                "dependencies": {"mem0ai": "^3.0.7"},
-            }
-        )
-    )
-    (plugin / "src/entry.ts").write_text("""import MemoryClient from "mem0ai";
-import { loadConfig } from "./config/index.ts";
-import { shared } from "../../agent-plugin-core/typescript/src/lifecycle.ts";
-export default function extension() {
-  const config = loadConfig();
-  return new MemoryClient({ apiKey: config.apiKey });
-}
-""")
-    (plugin / "src/config/index.ts").write_text("""import * as os from "node:os";
-import * as path from "node:path";
-const AGENT_ROOT = path.join(os.homedir(), ".pi", "agent");
-export function loadConfig() { return {apiKey: process.env.MEM0_API_KEY}; }
-""")
-    (plugin / "src/memory").mkdir()
-    (plugin / "src/memory/tools.ts").write_text(
-        "mem0.update(memoryId, { text: params.content });\nmem0.delete(normalizeMemoryId(params.memory_id));\n"
-    )
-    (plugin / "src/commands.ts").write_text("mem0.delete(target.id);\n")
-    core = root / "integrations/agent-plugin-core/typescript/src"
-    core.mkdir(parents=True)
-    (core / "lifecycle.ts").write_text("export const shared = true;\n")
-    return root
-
-
-def run_installer(tmp_path: Path, upstream: Path, *extra: str) -> subprocess.CompletedProcess[str]:
+def run_installer(
+    tmp_path: Path, pi_upstream: Path, *extra: str
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
             sys.executable,
@@ -64,7 +27,7 @@ def run_installer(tmp_path: Path, upstream: Path, *extra: str) -> subprocess.Com
             "--url",
             "https://mem0.example.test",
             "--upstream-plugin-dir",
-            str(upstream),
+            str(pi_upstream),
             "--target-root",
             str(tmp_path / "generated"),
             "--no-build",
@@ -77,10 +40,12 @@ def run_installer(tmp_path: Path, upstream: Path, *extra: str) -> subprocess.Com
     )
 
 
-def test_generation_preserves_native_resources_and_keeps_api_key_private(tmp_path: Path, upstream: Path) -> None:
+def test_generation_preserves_native_resources_and_keeps_api_key_private(
+    tmp_path: Path, pi_upstream: Path
+) -> None:
     # Given an official package and token supplied through stdin.
     # When a standalone OSS copy is generated.
-    result = run_installer(tmp_path, upstream, "--api-key-stdin")
+    result = run_installer(tmp_path, pi_upstream, "--api-key-stdin")
     # Then native resources survive and credentials stay outside the package.
     assert result.returncode == 0, result.stderr
     plugin = tmp_path / "generated/mem0-oss"
@@ -91,11 +56,17 @@ def test_generation_preserves_native_resources_and_keeps_api_key_private(tmp_pat
     assert (plugin / "skills/search/SKILL.md").is_file()
     source = (plugin / "src/entry.ts").read_text()
     assert 'from "./agent-plugin-core/lifecycle.ts"' in source
-    assert source.index("initializeMem0OssEnv({") < source.index("const config = loadConfig()")
+    assert source.index("initializeMem0OssEnv({") < source.index(
+        "const config = loadConfig()"
+    )
     assert (plugin / "src/agent-plugin-core/lifecycle.ts").is_file()
-    assert "filters: resolveSearchFilters(scope, scopeCtx)" in (plugin / "src/memory/tools.ts").read_text()
     assert (
-        "filters: resolveSearchFilters(config.defaultScope, getScopeCtx())" in (plugin / "src/commands.ts").read_text()
+        "filters: resolveSearchFilters(scope, scopeCtx)"
+        in (plugin / "src/memory/tools.ts").read_text()
+    )
+    assert (
+        "filters: resolveSearchFilters(config.defaultScope, getScopeCtx())"
+        in (plugin / "src/commands.ts").read_text()
     )
     assert not (plugin / "mem0_oss_memory_client.ts").exists()
     assert "MEM0_OSS_MCP" not in (plugin / "mem0_oss_pi_client.ts").read_text()
@@ -105,15 +76,21 @@ def test_generation_preserves_native_resources_and_keeps_api_key_private(tmp_pat
     assert all("test-token-with-" not in p.read_text() for p in plugin.rglob("*.ts"))
 
 
-def test_install_preserves_settings_and_registers_package_once(tmp_path: Path, upstream: Path) -> None:
+def test_install_preserves_settings_and_registers_package_once(
+    tmp_path: Path, pi_upstream: Path
+) -> None:
     # Given existing Pi settings with a configured package and model.
     agent_dir = tmp_path / "agent"
     agent_dir.mkdir()
     settings = agent_dir / "settings.json"
-    settings.write_text(json.dumps({"model": "example-model", "packages": ["npm:example"]}))
+    settings.write_text(
+        json.dumps({"model": "example-model", "packages": ["npm:example"]})
+    )
     # When installation is repeated with source loading enabled.
     for _ in range(2):
-        result = run_installer(tmp_path, upstream, "--install", "--pi-dir", str(agent_dir))
+        result = run_installer(
+            tmp_path, upstream, "--install", "--pi-dir", str(agent_dir)
+        )
         assert result.returncode == 0, result.stderr
     # Then unrelated settings remain and the local package is registered once.
     config = json.loads(settings.read_text())
@@ -125,21 +102,27 @@ def test_install_preserves_settings_and_registers_package_once(tmp_path: Path, u
     assert package["pi"]["extensions"] == ["./src/entry.ts"]
 
 
-def test_incompatible_upstream_fails_before_replacing_existing_package(tmp_path: Path, upstream: Path) -> None:
+def test_incompatible_upstream_fails_before_replacing_existing_package(
+    tmp_path: Path, pi_upstream: Path
+) -> None:
     # Given a vendor layout with the required shared core missing.
-    (upstream / "integrations/agent-plugin-core/typescript/src/lifecycle.ts").unlink()
+    (
+        pi_upstream / "integrations/agent-plugin-core/typescript/src/lifecycle.ts"
+    ).unlink()
     marker = tmp_path / "generated/mem0-oss/keep.txt"
     marker.parent.mkdir(parents=True)
     marker.write_text("existing installation")
     # When generation is attempted.
-    result = run_installer(tmp_path, upstream)
+    result = run_installer(tmp_path, pi_upstream)
     # Then the old installation survives and the missing source is explained.
     assert result.returncode == 1
     assert "shared core" in result.stderr
     assert marker.read_text() == "existing installation"
 
 
-def test_build_failure_preserves_installed_package_and_settings(tmp_path: Path, upstream: Path) -> None:
+def test_build_failure_preserves_installed_package_and_settings(
+    tmp_path: Path, pi_upstream: Path
+) -> None:
     # Given an existing package and a build tool that fails.
     marker = tmp_path / "generated/mem0-oss/keep.txt"
     marker.parent.mkdir(parents=True)
@@ -161,7 +144,7 @@ def test_build_failure_preserves_installed_package_and_settings(tmp_path: Path, 
             "--url",
             "https://mem0.example.test",
             "--upstream-plugin-dir",
-            str(upstream),
+            str(pi_upstream),
             "--target-root",
             str(tmp_path / "generated"),
             "--install",
@@ -179,11 +162,15 @@ def test_build_failure_preserves_installed_package_and_settings(tmp_path: Path, 
     assert settings.read_text() == '{"packages":["existing"]}'
 
 
-def test_credentials_inside_package_are_rejected(tmp_path: Path, upstream: Path) -> None:
+def test_credentials_inside_package_are_rejected(
+    tmp_path: Path, pi_upstream: Path
+) -> None:
     # Given a credential path that would be distributed inside the package.
     env_file = tmp_path / "generated/mem0-oss/secret.env"
     # When the user selects that path.
-    result = run_installer(tmp_path, upstream, "--api-key-stdin", "--env-file", str(env_file))
+    result = run_installer(
+        tmp_path, upstream, "--api-key-stdin", "--env-file", str(env_file)
+    )
     # Then generation stops before writing credentials.
     assert result.returncode == 1
     assert "outside the generated package" in result.stderr
@@ -191,12 +178,20 @@ def test_credentials_inside_package_are_rejected(tmp_path: Path, upstream: Path)
 
 
 @pytest.mark.parametrize(
-    "url", ["invalid", "https://mem0.test/mcp", "https://secret@mem0.test", "https://mem0.test?key=secret"]
+    "url",
+    [
+        "invalid",
+        "https://mem0.test/mcp",
+        "https://secret@mem0.test",
+        "https://mem0.test?key=secret",
+    ],
 )
-def test_invalid_url_does_not_create_target(tmp_path: Path, upstream: Path, url: str) -> None:
+def test_invalid_url_does_not_create_target(
+    tmp_path: Path, pi_upstream: Path, url: str
+) -> None:
     # Given an invalid REST endpoint.
     # When it is supplied to the installer.
-    result = run_installer(tmp_path, upstream, "--url", url)
+    result = run_installer(tmp_path, pi_upstream, "--url", url)
     # Then no package is generated.
     assert result.returncode == 1
     assert "--url must be" in result.stderr
@@ -204,7 +199,9 @@ def test_invalid_url_does_not_create_target(tmp_path: Path, upstream: Path, url:
     assert not (tmp_path / "generated").exists()
 
 
-def test_settings_failure_preserves_existing_package(tmp_path: Path, upstream: Path) -> None:
+def test_settings_failure_preserves_existing_package(
+    tmp_path: Path, pi_upstream: Path
+) -> None:
     # Given an existing package and a Pi settings location that is not a directory.
     marker = tmp_path / "generated/mem0-oss/keep.txt"
     marker.parent.mkdir(parents=True)
@@ -212,7 +209,9 @@ def test_settings_failure_preserves_existing_package(tmp_path: Path, upstream: P
     agent_dir = tmp_path / "agent"
     agent_dir.write_text("keep settings location")
     # When installation cannot persist Pi settings.
-    result = run_installer(tmp_path, upstream, "--install", "--pi-dir", str(agent_dir))
+    result = run_installer(
+        tmp_path, pi_upstream, "--install", "--pi-dir", str(agent_dir)
+    )
     # Then the original active package and settings location remain intact.
     assert result.returncode == 1
     assert marker.read_text() == "active package"
@@ -220,7 +219,7 @@ def test_settings_failure_preserves_existing_package(tmp_path: Path, upstream: P
 
 
 def test_settings_commit_failure_rolls_back_package_and_key(
-    tmp_path: Path, upstream: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, pi_upstream: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Given active package, settings, and private credentials.
     marker = tmp_path / "generated/mem0-oss/keep.txt"
@@ -252,7 +251,7 @@ def test_settings_commit_failure_rolls_back_package_and_key(
             "--url",
             "https://mem0.test",
             "--upstream-plugin-dir",
-            str(upstream),
+            str(pi_upstream),
             "--target-root",
             str(tmp_path / "generated"),
             "--no-build",
