@@ -12,7 +12,7 @@ import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import TracebackType
-from typing import Literal, Protocol, TypeAlias, assert_never
+from typing import Literal, NoReturn, Protocol, TypeAlias
 
 
 AuthMode: TypeAlias = Literal["disabled", "static", "hybrid", "core_api_key"]
@@ -21,6 +21,10 @@ CredentialKind: TypeAlias = Literal["disabled", "legacy_static", "core_api_key"]
 JSONScalar: TypeAlias = str | int | float | bool | None
 JSONValue: TypeAlias = JSONScalar | list["JSONValue"] | dict[str, "JSONValue"]
 _MAX_CORE_AUTH_RESPONSE_BYTES = 64 * 1024
+
+
+def _assert_never(value: NoReturn) -> NoReturn:
+    raise AssertionError(f"unreachable authentication mode: {value!r}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -279,7 +283,7 @@ class McpAuthenticator:
                     _bearer_credential(authorization_header)
                 )
             case unreachable:
-                assert_never(unreachable)
+                _assert_never(unreachable)
 
     def _authenticate_core_api_key(self, credential: str) -> AuthPrincipal:
         request = urllib.request.Request(
