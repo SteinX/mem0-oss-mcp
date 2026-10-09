@@ -579,7 +579,7 @@ def add_memory(args: JSON) -> JSON:
                 "project_id": Config.sidecar_project_id,
                 "app_id": app_id,
             },
-            **({"idempotency_key": idempotency_key} if idempotency_key is not None else {}),
+            idempotency_key=idempotency_key,
         )
     else:
         result = _backend("POST", "/memories", body)
