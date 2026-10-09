@@ -182,6 +182,8 @@ def test_credentials_inside_package_are_rejected(
     [
         "invalid",
         "https://mem0.test/mcp",
+        "https://mem0.test/v1",
+        "https://mem0.test/v1/",
         "https://secret@mem0.test",
         "https://mem0.test?key=secret",
     ],

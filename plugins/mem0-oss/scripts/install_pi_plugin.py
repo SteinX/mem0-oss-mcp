@@ -63,10 +63,10 @@ def validate_rest_url(value: str) -> str:
         or url.password
         or url.query
         or url.fragment
-        or url.path.rstrip("/").endswith("/mcp")
+        or url.path.rstrip("/").endswith(("/mcp", "/v1"))
     ):
         raise InstallerError(
-            "--url must be an OSS REST base URL without credentials, query, fragment or /mcp"
+            "--url must be an OSS REST base URL without credentials, query, fragment, /mcp or /v1"
         )
     return value.strip().rstrip("/")
 

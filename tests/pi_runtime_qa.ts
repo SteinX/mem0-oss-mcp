@@ -81,6 +81,20 @@ if (fixture) {
   process.env.MEM0_OSS_BASE_URL = `http://127.0.0.1:${fixture.port}`;
   delete process.env.MEM0_OSS_API_KEY;
   delete process.env.MEM0_API_KEY;
+  delete process.env.MEM0_OSS_ENV_FILE;
+  writeFileSync(join(agentDir, "mem0-config.json"), JSON.stringify({ apiKey: "fixture-'secret", autoCapture: false }));
+  const configured = await createAgentSession({ cwd, agentDir, sessionManager: SessionManager.inMemory(cwd) });
+  try {
+    if (configured.extensionsResult.errors.length === 0) {
+      await configured.session.bindExtensions({});
+      await configured.session.prompt("/mem0-status");
+    }
+    assert.equal(calls.length, 0, "Config-file key reached the conflicting origin");
+    assert(configured.extensionsResult.errors.some((error) => error.error.includes("different origin")));
+  } finally {
+    configured.session.dispose();
+  }
+  writeFileSync(join(agentDir, "mem0-config.json"), JSON.stringify({ autoCapture: true }));
   const envFile = join(agentDir, "key.env");
   writeFileSync(envFile, "MEM0_OSS_API_KEY='fixture-'\"'\"'secret'\n", { mode: 0o600 });
   process.env.MEM0_OSS_ENV_FILE = envFile;

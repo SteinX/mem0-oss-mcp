@@ -22,8 +22,9 @@ export function validateRestBaseUrl(value: string): string {
     throw error;
   }
   if (!["http:", "https:"].includes(url.protocol) || !url.hostname
-    || url.username || url.password || url.search || url.hash || url.pathname.replace(/\/+$/, "").endsWith("/mcp")) {
-    throw new Mem0ConnectionError("Mem0 OSS base URL must use http(s), without credentials, query, fragment or /mcp");
+    || url.username || url.password || url.search || url.hash
+    || ["/mcp", "/v1"].some((suffix) => url.pathname.replace(/\/+$/, "").endsWith(suffix))) {
+    throw new Mem0ConnectionError("Mem0 OSS base URL must use http(s), without credentials, query, fragment, /mcp or /v1");
   }
   return url.href.replace(/\/+$/, "");
 }
@@ -63,10 +64,10 @@ export function initializeMem0OssEnv(options: ConnectionOptions): void {
   const keyName = process.env.MEM0_OSS_API_KEY_ENV_VAR || options.apiKeyEnvVar;
   const envFile = process.env.MEM0_OSS_ENV_FILE || options.envFile;
   let key = process.env[keyName];
+  if (!key && new URL(baseUrl).origin !== new URL(validateRestBaseUrl(options.url)).origin) {
+    throw new Mem0ConnectionError("Mem0 OSS endpoint override for a different origin requires an explicit runtime API key");
+  }
   if (!key && envFile) {
-    if (new URL(baseUrl).origin !== new URL(validateRestBaseUrl(options.url)).origin) {
-      throw new Mem0ConnectionError("Mem0 OSS endpoint override for a different origin requires an explicit runtime API key");
-    }
     for (const line of readFileSync(envFile, "utf8").split(/\r?\n/)) {
       const separator = line.indexOf("=");
       if (separator >= 0 && line.slice(0, separator).trim() === keyName) {
