@@ -123,7 +123,7 @@ def test_incompatible_upstream_fails_before_replacing_existing_package(
 
 
 def test_build_failure_preserves_installed_package_and_settings(
-    tmp_path: Path, pi_upstream: Path
+    tmp_path: Path, pi_upstream: Path, pi_failing_tools: Path
 ) -> None:
     # Given an existing package and a build tool that fails.
     marker = tmp_path / "generated/mem0-oss/keep.txt"
@@ -133,11 +133,6 @@ def test_build_failure_preserves_installed_package_and_settings(
     agent_dir.mkdir()
     settings = agent_dir / "settings.json"
     settings.write_text('{"packages":["existing"]}')
-    commands = tmp_path / "bin"
-    commands.mkdir()
-    pnpm = commands / "pnpm"
-    pnpm.write_text("#!/bin/sh\nexit 42\n")
-    pnpm.chmod(0o755)
     # When the installer cannot finish the new build.
     result = subprocess.run(
         [
@@ -153,13 +148,17 @@ def test_build_failure_preserves_installed_package_and_settings(
             "--pi-dir",
             str(agent_dir),
         ],
-        env={**os.environ, "PATH": str(commands)},
+        env={**os.environ, "PATH": str(pi_failing_tools)},
         text=True,
         capture_output=True,
         check=False,
     )
     # Then the active package and settings survive unchanged.
     assert result.returncode == 1
+    if (pi_failing_tools / "node").exists():
+        assert "exit status 42" in result.stderr
+    else:
+        assert "Node.js is required" in result.stderr
     assert marker.read_text() == "old package"
     assert settings.read_text() == '{"packages":["existing"]}'
 
@@ -201,6 +200,7 @@ def test_credentials_inside_package_are_rejected(
         "http://foo％bar",
         "http://%EF%BC%8F.test",
         "http://mem0%7F.test",
+        "http://a٠b.test",
     ],
 )
 def test_invalid_url_does_not_create_target(

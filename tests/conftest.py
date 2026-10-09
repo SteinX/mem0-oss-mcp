@@ -1,9 +1,24 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 import pytest
+
+
+@pytest.fixture(params=["build", "node"])
+def pi_failing_tools(tmp_path: Path, request: pytest.FixtureRequest) -> Path:
+    commands = tmp_path / "bin"
+    commands.mkdir()
+    if request.param == "build":
+        node = shutil.which("node")
+        assert node is not None
+        (commands / "node").symlink_to(node)
+    pnpm = commands / "pnpm"
+    pnpm.write_text("#!/bin/sh\nexit 42\n")
+    pnpm.chmod(0o755)
+    return commands
 
 
 @pytest.fixture(

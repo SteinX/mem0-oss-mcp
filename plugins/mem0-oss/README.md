@@ -124,7 +124,8 @@ printf '%s\n' "$MEM0_OSS_API_KEY" | \
   --install
 ```
 
-Use the Core REST base URL without `/mcp` or `/v1`, and a Core API key rather
+Generation requires Node.js for the same URL/IDNA validation as Pi. Use the
+Core REST base URL without `/mcp` or `/v1`, and a Core API key rather
 than an MCP bearer token. `--install` preserves other Pi settings and registers
 the generated package once. `--no-build` uses Pi's TypeScript loading. API keys
 remain in an owner-only env file outside the generated package. Runtime

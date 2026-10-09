@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import Client from "../plugins/mem0-oss/scripts/oss_adapter/mem0_oss_pi_client.ts";
 
+for (const url of ["http://foo％bar", "http://%EF%BC%8F.test", "http://mem0%7F.test", "http://a٠b.test"]) {
+  process.env.MEM0_OSS_BASE_URL = url;
+  assert.throws(() => new Client({ apiKey: "list-fixture-key" }), /base URL/);
+}
+
 type Mode = "ignored" | "capped" | "normal";
 let mode: Mode = "ignored";
 const calls: number[] = [];

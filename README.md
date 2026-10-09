@@ -317,7 +317,9 @@ as timestamped backups; a failed build leaves the active package and settings
 unchanged. Settings are replaced atomically; a failed settings commit restores
 the previous package and credentials.
 
-Building requires pnpm and the upstream development dependencies. Use
+Generation requires Node.js so installer URL parsing uses Pi's WHATWG URL
+semantics, including IDNA validation. Building also requires pnpm and the
+upstream development dependencies. Use
 `--no-build` for Pi's direct TypeScript loading, which uses Pi's host packages.
 `--pi-dir` selects the settings directory; set `PI_CODING_AGENT_DIR` at runtime
 to use that directory. Restart Pi or run `/reload` after installation. Avoid
