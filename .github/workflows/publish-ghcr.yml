@@ -31,7 +31,10 @@ jobs:
           image="$REGISTRY/${IMAGE_NAME,,}"
           sha_tag="$image:${GITHUB_SHA}"
 
-          docker build -t "$sha_tag" .
+          docker build -t "$sha_tag" \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            --label "org.opencontainers.image.version=${RELEASE_TAG:-${GITHUB_SHA}}" .
           docker push "$sha_tag"
 
           if [ -n "$RELEASE_TAG" ]; then
