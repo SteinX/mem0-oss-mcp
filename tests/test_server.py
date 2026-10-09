@@ -188,7 +188,8 @@ class MappingTests(unittest.TestCase):
     def test_sidecar_add_preserves_project_and_app_scope(self):
         calls = []
 
-        def fake_sidecar(method, path, body=None, query=None):
+        def fake_sidecar(method, path, body=None, query=None, *, idempotency_key=None):
+            self.assertIsNone(idempotency_key)
             calls.append({"method": method, "path": path, "body": body, "query": query})
             return {"memory": {"id": "mem-sidecar"}}
 
