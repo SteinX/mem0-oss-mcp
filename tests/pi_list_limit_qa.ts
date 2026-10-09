@@ -43,6 +43,10 @@ try {
   delete process.env.MEM0_OSS_ENV_FILE;
   initializeMem0OssEnv({ url: `http://127.0.0.1:${newEndpoint.port}/fresh`, apiKeyEnvVar: "MEM0_OSS_API_KEY", envFile: undefined });
   assert.equal(process.env.MEM0_OSS_PI_RESOLVED_API_KEY, undefined, "Reload retained a previous file-backed key");
+  process.env.MEM0_API_KEY = "explicit-legacy-fixture-key";
+  initializeMem0OssEnv({ url: `http://127.0.0.1:${newEndpoint.port}/fresh`, apiKeyEnvVar: "MEM0_OSS_API_KEY", envFile: undefined });
+  assert.equal(process.env.MEM0_OSS_PI_RESOLVED_API_KEY, "explicit-legacy-fixture-key");
+  assert.equal(process.env.MEM0_API_KEY, "explicit-legacy-fixture-key");
 } finally {
   oldEndpoint.stop(true);
   newEndpoint.stop(true);

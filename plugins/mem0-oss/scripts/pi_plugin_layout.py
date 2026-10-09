@@ -125,7 +125,7 @@ def patch_sources(plugin: Path, connection: Connection) -> None:
         )
         .replace(
             "process.env.MEM0_API_KEY",
-            "(process.env.MEM0_OSS_PI_RESOLVED_API_KEY || process.env.MEM0_API_KEY)",
+            "process.env.MEM0_OSS_PI_RESOLVED_API_KEY",
         )
     )
     config.write_text(content, encoding="utf-8")

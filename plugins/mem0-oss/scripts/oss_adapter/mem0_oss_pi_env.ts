@@ -75,6 +75,7 @@ export function initializeMem0OssEnv(options: ConnectionOptions): void {
       }
     }
   }
+  key ||= process.env.MEM0_API_KEY;
   process.env.MEM0_OSS_PI_RESOLVED_BASE_URL = baseUrl;
   if (key) process.env.MEM0_OSS_PI_RESOLVED_API_KEY = key;
   else delete process.env.MEM0_OSS_PI_RESOLVED_API_KEY;
