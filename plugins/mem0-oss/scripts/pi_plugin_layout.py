@@ -3,8 +3,10 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass
+from ipaddress import IPv4Address, IPv6Address
 from pathlib import Path
 from typing import Final
+from urllib.parse import ParseResult, unquote, urlparse
 
 from install_opencode_plugin import js_literal
 
@@ -22,6 +24,57 @@ class Connection:
     url: str
     api_key_env_var: str
     env_file: Path | None
+
+
+def _valid_rest_authority(url: ParseResult) -> bool:
+    hostname = unquote(url.hostname or "", errors="strict")
+    if not hostname or any(
+        char.isspace() or ord(char) < 32 or char in "%#/:<>?@[\\]^|"
+        for char in hostname.replace(":", "")
+    ):
+        return False
+    if "\\" in url.netloc or any(char.isspace() for char in url.netloc):
+        return False
+    if url.port is not None and not 0 <= url.port <= 65535:
+        return False
+    if ":" in hostname:
+        if not url.netloc.startswith("["):
+            return False
+        IPv6Address(hostname)
+    elif url.netloc.startswith("["):
+        return False
+    else:
+        ascii_host = hostname.encode("idna").decode("ascii").rstrip(".")
+        last = ascii_host.rsplit(".", 1)[-1]
+        if last.isdecimal() or re.fullmatch(r"0[xX][0-9a-fA-F]+", last):
+            IPv4Address(ascii_host)
+    return True
+
+
+def validate_rest_url(value: str) -> str:
+    normalized = value.strip()
+    try:
+        url = urlparse(normalized)
+        valid = _valid_rest_authority(url) and not any(
+            ord(char) < 32 or ord(char) == 127 for char in normalized
+        )
+    except (ValueError, UnicodeError):
+        valid = False
+    if not valid or url.scheme not in {"http", "https"}:
+        raise InstallerError(
+            "--url must be an absolute http(s) URL with a valid hostname and port"
+        )
+    if (
+        url.username
+        or url.password
+        or url.query
+        or url.fragment
+        or url.path.rstrip("/").endswith(("/mcp", "/v1"))
+    ):
+        raise InstallerError(
+            "--url must be an OSS REST base URL without credentials, query, fragment, /mcp or /v1"
+        )
+    return normalized.rstrip("/")
 
 
 def validate_source(path: Path) -> Path:

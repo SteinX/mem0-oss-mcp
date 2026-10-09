@@ -18,7 +18,6 @@ from contextlib import ExitStack
 from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from urllib.parse import urlparse
 
 from install_opencode_plugin import (
     copy_adapter_file,
@@ -35,7 +34,13 @@ from install_opencode_plugin import (
     validate_token_value,
 )
 
-from pi_plugin_layout import Connection, InstallerError, patch_sources, validate_source
+from pi_plugin_layout import (
+    Connection,
+    InstallerError,
+    patch_sources,
+    validate_rest_url,
+    validate_source,
+)
 
 
 class Arguments(argparse.Namespace):
@@ -52,23 +57,6 @@ class Arguments(argparse.Namespace):
     )
     no_build: bool = False
     install: bool = False
-
-
-def validate_rest_url(value: str) -> str:
-    url = urlparse(value.strip())
-    if url.scheme not in {"http", "https"} or not url.netloc:
-        raise InstallerError("--url must be an absolute http(s) URL")
-    if (
-        url.username
-        or url.password
-        or url.query
-        or url.fragment
-        or url.path.rstrip("/").endswith(("/mcp", "/v1"))
-    ):
-        raise InstallerError(
-            "--url must be an OSS REST base URL without credentials, query, fragment, /mcp or /v1"
-        )
-    return value.strip().rstrip("/")
 
 
 def parse_args() -> Arguments:

@@ -41,11 +41,13 @@ def run_installer(
 
 
 def test_generation_preserves_native_resources_and_keeps_api_key_private(
-    tmp_path: Path, pi_upstream: Path
+    tmp_path: Path, pi_upstream: Path, pi_core_url: str
 ) -> None:
     # Given an official package and token supplied through stdin.
     # When a standalone OSS copy is generated.
-    result = run_installer(tmp_path, pi_upstream, "--api-key-stdin")
+    result = run_installer(
+        tmp_path, pi_upstream, "--api-key-stdin", "--url", pi_core_url
+    )
     # Then native resources survive and credentials stay outside the package.
     assert result.returncode == 0, result.stderr
     plugin = tmp_path / "generated/mem0-oss"
@@ -186,6 +188,16 @@ def test_credentials_inside_package_are_rejected(
         "https://mem0.test/v1/",
         "https://secret@mem0.test",
         "https://mem0.test?key=secret",
+        "http://example.com:notaport",
+        "http://example.com:65536",
+        "http://mem0 .test",
+        "http://mem0%20.test",
+        "http://999.0.0.1",
+        "http://[v1.host]",
+        "http://:80",
+        "http://[::1",
+        "http://mem0\\host",
+        "http://mem0.\ttest",
     ],
 )
 def test_invalid_url_does_not_create_target(

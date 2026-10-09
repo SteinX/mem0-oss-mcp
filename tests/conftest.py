@@ -6,6 +6,22 @@ from pathlib import Path
 import pytest
 
 
+@pytest.fixture(
+    params=[
+        "http://mem0:8000",
+        "http://127.0.0.1:8000",
+        "http://[::1]:8000",
+        "https://mem0.example",
+        "http://mem0_dev:8000",
+        "https://记忆.test",
+    ]
+)
+def pi_core_url(request: pytest.FixtureRequest) -> str:
+    value = request.param
+    assert isinstance(value, str)
+    return value
+
+
 @pytest.fixture
 def pi_upstream(tmp_path: Path) -> Path:
     root = tmp_path / "upstream"
