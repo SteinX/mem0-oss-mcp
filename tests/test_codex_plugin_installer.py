@@ -14,6 +14,7 @@ INSTALLER = REPO_ROOT / "plugins" / "mem0-oss" / "scripts" / "install_codex_plug
 
 
 def load_installer():
+    sys.path.insert(0, str(INSTALLER.parent))
     spec = importlib.util.spec_from_file_location("mem0_oss_installer_test", INSTALLER)
     assert spec is not None
     assert spec.loader is not None
@@ -163,7 +164,7 @@ def test_installer_generates_local_marketplace(tmp_path: Path) -> None:
     manifest = json.loads((plugin_root / ".codex-plugin" / "plugin.json").read_text())
     assert manifest["name"] == "mem0-example"
     assert manifest["interface"]["displayName"] == "Mem0 Example"
-    assert manifest["version"].startswith("0.1.4+codex.")
+    assert manifest["version"].startswith("0.1.5+codex.")
 
     mcp = json.loads((plugin_root / ".mcp.json").read_text())
     assert "mcp_servers" not in mcp
