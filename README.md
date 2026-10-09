@@ -277,6 +277,68 @@ choose the dotenv path yourself.
 To update the upstream OpenCode plugin files, update the `third_party/mem0`
 submodule and rerun `install_opencode_plugin.py`.
 
+## Pi plugin
+
+Generate a local Pi extension from the official `integrations/pi-agent-plugin`
+source. Use a Mem0 checkout with Pi plugin 0.3.2 or later and its sibling
+`integrations/agent-plugin-core` directory:
+
+```bash
+printf '%s\n' "$MEM0_OSS_API_KEY" | \
+  python3 plugins/mem0-oss/scripts/install_pi_plugin.py \
+  --url http://<mem0-core-host>:<port> \
+  --upstream-plugin-dir /path/to/mem0-checkout \
+  --api-key-stdin \
+  --install
+```
+
+Pi calls the Mem0 OSS REST API directly with `X-API-Key`. It does not require an
+MCP server, sidecar, `mem0ai`, or a cloud account. Supply the Core API base URL,
+without `/mcp` or `/v1`. `MEM0_OSS_BASE_URL` can override the generated endpoint
+at runtime. Keep the Core endpoint reachable from Pi; a reverse proxy may route
+the same REST paths through a sidecar, so select the actual Core endpoint when
+you want direct Core access.
+
+The installer keeps official Pi commands, skills, project/session/global scopes,
+automatic recall and redacted conversation capture. It rejects upstream sources
+missing the shared core before replacing an existing installation. The default
+upstream source is `third_party/mem0`.
+
+Generated packages live in `~/.mem0-oss/pi-plugins/<name>`. API keys are stored
+outside the package in an owner-only dotenv file. Use `--env-file` with
+`--api-key-env-var` for an existing private file, or provide `MEM0_OSS_API_KEY`
+in Pi's environment. Pi's usual `mem0-config.json` API key is also supported.
+`--install` adds the absolute package path to Pi's `settings.json` without
+changing other settings or duplicating entries. Existing packages are retained
+as timestamped backups; a failed build leaves the active package and settings
+unchanged.
+
+Building requires pnpm and the upstream development dependencies. Use
+`--no-build` for Pi's direct TypeScript loading, which uses Pi's host packages.
+`--pi-dir` selects the settings directory; set `PI_CODING_AGENT_DIR` at runtime
+to use that directory. Restart Pi or run `/reload` after installation. Avoid
+loading the cloud Mem0 package and this OSS copy in the same session, because
+they register the same tools and commands.
+
+Pi's `mem0-config.json` options remain available, including `userId`,
+`defaultScope`, `contextInjection` and `autoCapture`. To disable conversation
+writes while retaining explicit commands, use `{"autoCapture": false}`.
+`MEM0_USER_ID` can align identity with other clients. The official Pi plugin
+derives the project `app_id` from the repository directory name. The direct
+adapter stores it in memory metadata and uses it as a search filter; sharing
+with another client requires matching user and project metadata.
+
+Writes return synchronous OSS results rather than asynchronous event receipts;
+no writes are retried automatically. OSS does not accept the cloud SDK's
+`customCategories`, `rerank`, or `source` body options. Pi attribution headers
+are forwarded; memory inference and optional reranking run on the server.
+Project listing fetches the entity scope and filters `metadata.app_id` locally.
+Scoped deletion includes expired memories and deletes matching IDs individually,
+never the broader user-level bulk endpoint. A full fetch window is treated as
+potential truncation and stops listing/deletion before any delete. The default
+window is 1000; `MEM0_OSS_LIST_FETCH_LIMIT` can raise it within the Core server's
+configured limit. If a delete fails partway, the error reports completed deletes.
+
 ## Run
 
 ```bash

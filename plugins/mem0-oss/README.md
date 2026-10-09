@@ -108,3 +108,24 @@ or `legacy` to restore upstream every-third-message capture. Client-side Dream
 is disabled by default; pass `--client-dream` only when it is intentionally
 required. Runtime `MEM0_OSS_AUTO_CAPTURE_MODE` and `MEM0_DREAM` values override
 these generated defaults.
+## Pi
+
+`scripts/install_pi_plugin.py` generates a local copy of the official Pi
+extension using the Mem0 OSS REST API directly, with `X-API-Key` authentication.
+No MCP server or sidecar is required. See the repository README's Pi section
+for source requirements, scope behavior and configuration.
+
+```bash
+printf '%s\n' "$MEM0_OSS_API_KEY" | \
+  python3 plugins/mem0-oss/scripts/install_pi_plugin.py \
+  --url http://<mem0-core-host>:<port> \
+  --upstream-plugin-dir /path/to/mem0-checkout \
+  --api-key-stdin \
+  --install
+```
+
+Use the Core REST base URL without `/mcp` or `/v1`, and a Core API key rather
+than an MCP bearer token. `--install` preserves other Pi settings and registers
+the generated package once. `--no-build` uses Pi's TypeScript loading. API keys
+remain in an owner-only env file outside the generated package. Runtime
+`MEM0_OSS_BASE_URL` and `MEM0_OSS_API_KEY` can override the connection.

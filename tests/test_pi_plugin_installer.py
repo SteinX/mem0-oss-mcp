@@ -1,0 +1,193 @@
+from __future__ import annotations
+
+import json
+import os
+import stat
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+INSTALLER = Path(__file__).resolve().parents[1] / "plugins/mem0-oss/scripts/install_pi_plugin.py"
+
+
+@pytest.fixture
+def upstream(tmp_path: Path) -> Path:
+    root = tmp_path / "upstream"
+    plugin = root / "integrations/pi-agent-plugin"
+    (plugin / "src/config").mkdir(parents=True)
+    (plugin / "skills/search").mkdir(parents=True)
+    (plugin / "skills/search/SKILL.md").write_text("---\nname: search\n---\n")
+    (plugin / "package.json").write_text(
+        json.dumps(
+            {
+                "name": "@mem0/pi-agent-plugin",
+                "version": "0.3.2",
+                "type": "module",
+                "pi": {"extensions": ["./dist/entry.js"], "skills": ["./skills"]},
+                "dependencies": {"mem0ai": "^3.0.7"},
+            }
+        )
+    )
+    (plugin / "src/entry.ts").write_text("""import MemoryClient from "mem0ai";
+import { loadConfig } from "./config/index.ts";
+import { shared } from "../../agent-plugin-core/typescript/src/lifecycle.ts";
+export default function extension() {
+  const config = loadConfig();
+  return new MemoryClient({ apiKey: config.apiKey });
+}
+""")
+    (plugin / "src/config/index.ts").write_text("""import * as os from "node:os";
+import * as path from "node:path";
+const AGENT_ROOT = path.join(os.homedir(), ".pi", "agent");
+export function loadConfig() { return {apiKey: process.env.MEM0_API_KEY}; }
+""")
+    core = root / "integrations/agent-plugin-core/typescript/src"
+    core.mkdir(parents=True)
+    (core / "lifecycle.ts").write_text("export const shared = true;\n")
+    return root
+
+
+def run_installer(tmp_path: Path, upstream: Path, *extra: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            sys.executable,
+            str(INSTALLER),
+            "--url",
+            "https://mem0.example.test",
+            "--upstream-plugin-dir",
+            str(upstream),
+            "--target-root",
+            str(tmp_path / "generated"),
+            "--no-build",
+            *extra,
+        ],
+        input="test-token-with-'quotes\n",
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_generation_preserves_native_resources_and_keeps_api_key_private(tmp_path: Path, upstream: Path) -> None:
+    # Given an official package and token supplied through stdin.
+    # When a standalone OSS copy is generated.
+    result = run_installer(tmp_path, upstream, "--api-key-stdin")
+    # Then native resources survive and credentials stay outside the package.
+    assert result.returncode == 0, result.stderr
+    plugin = tmp_path / "generated/mem0-oss"
+    package = json.loads((plugin / "package.json").read_text())
+    assert package["name"] == "@mem0-oss/mem0-oss-pi-plugin"
+    assert "mem0ai" not in package["dependencies"]
+    assert package["pi"] == {"extensions": ["./src/entry.ts"], "skills": ["./skills"]}
+    assert (plugin / "skills/search/SKILL.md").is_file()
+    source = (plugin / "src/entry.ts").read_text()
+    assert 'from "./agent-plugin-core/lifecycle.ts"' in source
+    assert source.index("initializeMem0OssEnv({") < source.index("const config = loadConfig()")
+    assert (plugin / "src/agent-plugin-core/lifecycle.ts").is_file()
+    assert not (plugin / "mem0_oss_memory_client.ts").exists()
+    assert "MEM0_OSS_MCP" not in (plugin / "mem0_oss_pi_client.ts").read_text()
+    env_file = tmp_path / "generated/env/mem0-oss.env"
+    assert stat.S_IMODE(env_file.stat().st_mode) == 0o600
+    assert "test-token-with-" not in result.stdout
+    assert all("test-token-with-" not in p.read_text() for p in plugin.rglob("*.ts"))
+
+
+def test_install_preserves_settings_and_registers_package_once(tmp_path: Path, upstream: Path) -> None:
+    # Given existing Pi settings with a configured package and model.
+    agent_dir = tmp_path / "agent"
+    agent_dir.mkdir()
+    settings = agent_dir / "settings.json"
+    settings.write_text(json.dumps({"model": "example-model", "packages": ["npm:example"]}))
+    # When installation is repeated with source loading enabled.
+    for _ in range(2):
+        result = run_installer(tmp_path, upstream, "--install", "--pi-dir", str(agent_dir))
+        assert result.returncode == 0, result.stderr
+    # Then unrelated settings remain and the local package is registered once.
+    config = json.loads(settings.read_text())
+    assert config == {
+        "model": "example-model",
+        "packages": ["npm:example", str(tmp_path / "generated/mem0-oss")],
+    }
+    package = json.loads((tmp_path / "generated/mem0-oss/package.json").read_text())
+    assert package["pi"]["extensions"] == ["./src/entry.ts"]
+
+
+def test_incompatible_upstream_fails_before_replacing_existing_package(tmp_path: Path, upstream: Path) -> None:
+    # Given a vendor layout with the required shared core missing.
+    (upstream / "integrations/agent-plugin-core/typescript/src/lifecycle.ts").unlink()
+    marker = tmp_path / "generated/mem0-oss/keep.txt"
+    marker.parent.mkdir(parents=True)
+    marker.write_text("existing installation")
+    # When generation is attempted.
+    result = run_installer(tmp_path, upstream)
+    # Then the old installation survives and the missing source is explained.
+    assert result.returncode == 1
+    assert "shared core" in result.stderr
+    assert marker.read_text() == "existing installation"
+
+
+def test_build_failure_preserves_installed_package_and_settings(tmp_path: Path, upstream: Path) -> None:
+    # Given an existing package and a build tool that fails.
+    marker = tmp_path / "generated/mem0-oss/keep.txt"
+    marker.parent.mkdir(parents=True)
+    marker.write_text("old package")
+    agent_dir = tmp_path / "agent"
+    agent_dir.mkdir()
+    settings = agent_dir / "settings.json"
+    settings.write_text('{"packages":["existing"]}')
+    commands = tmp_path / "bin"
+    commands.mkdir()
+    pnpm = commands / "pnpm"
+    pnpm.write_text("#!/bin/sh\nexit 42\n")
+    pnpm.chmod(0o755)
+    # When the installer cannot finish the new build.
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(INSTALLER),
+            "--url",
+            "https://mem0.example.test",
+            "--upstream-plugin-dir",
+            str(upstream),
+            "--target-root",
+            str(tmp_path / "generated"),
+            "--install",
+            "--pi-dir",
+            str(agent_dir),
+        ],
+        env={**os.environ, "PATH": str(commands)},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    # Then the active package and settings survive unchanged.
+    assert result.returncode == 1
+    assert marker.read_text() == "old package"
+    assert settings.read_text() == '{"packages":["existing"]}'
+
+
+def test_credentials_inside_package_are_rejected(tmp_path: Path, upstream: Path) -> None:
+    # Given a credential path that would be distributed inside the package.
+    env_file = tmp_path / "generated/mem0-oss/secret.env"
+    # When the user selects that path.
+    result = run_installer(tmp_path, upstream, "--api-key-stdin", "--env-file", str(env_file))
+    # Then generation stops before writing credentials.
+    assert result.returncode == 1
+    assert "outside the generated package" in result.stderr
+    assert not env_file.exists()
+
+
+@pytest.mark.parametrize(
+    "url", ["invalid", "https://mem0.test/mcp", "https://secret@mem0.test", "https://mem0.test?key=secret"]
+)
+def test_invalid_url_does_not_create_target(tmp_path: Path, upstream: Path, url: str) -> None:
+    # Given an invalid REST endpoint.
+    # When it is supplied to the installer.
+    result = run_installer(tmp_path, upstream, "--url", url)
+    # Then no package is generated.
+    assert result.returncode == 1
+    assert "--url must be" in result.stderr
+    assert "secret" not in result.stdout + result.stderr
+    assert not (tmp_path / "generated").exists()
