@@ -147,6 +147,85 @@ def test_authenticated_add_without_operator_key_does_not_persist(idempotency_key
     assert "503" in json.dumps(body["result"])
 
 
+def test_disabled_auth_keyless_sidecar_add_event_reads_and_replay_over_loopback():
+    authenticator = McpAuthenticator.from_env(
+        base_url="",
+        env={
+            "MEM0_OSS_MCP_AUTH_MODE": "disabled",
+            "MEM0_OSS_MCP_HOST": "127.0.0.1",
+        },
+    )
+    persisted_event = {
+        "id": "disabled-local-event",
+        "status": "SUCCEEDED",
+        "subject_id": "memory-one",
+        "result_previews": [{"id": "memory-one", "memory": "local memory"}],
+        "result_count": 1,
+    }
+
+    def sidecar_backend(method, path, body=None, query=None, **kwargs):
+        if method == "POST":
+            return {
+                "event": {"id": persisted_event["id"]},
+                "memory": {"results": [{"id": "memory-one", "event": "ADD"}]},
+            }
+        assert method == "GET"
+        assert path == "/v1/event/disabled-local-event"
+        return persisted_event
+
+    def call_tool(base_url, request_id, name, arguments):
+        status, body = post_payload(
+            base_url,
+            {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "method": "tools/call",
+                "params": {"name": name, "arguments": arguments},
+            },
+        )
+        assert status == 200
+        assert body["result"].get("isError") is not True
+        return json.loads(body["result"]["content"][0]["text"])
+
+    with (
+        patch.object(server.Config, "sidecar_api_key", ""),
+        patch.dict(server.EVENTS, {}, clear=True),
+        patch.object(server, "_sidecar_backend", side_effect=sidecar_backend) as transport,
+        running_server(authenticator, sidecar_base_url="http://sidecar.test") as base_url,
+    ):
+        added = call_tool(
+            base_url,
+            1,
+            "add_memory",
+            {"text": "local memory", "idempotency_key": "local-add-one"},
+        )
+        assert added == {"event_id": "disabled-local-event", "status": "SUCCEEDED"}
+
+        listed = call_tool(base_url, 2, "list_events", {})
+        assert [event["event_id"] for event in listed["results"]] == [
+            "disabled-local-event"
+        ]
+
+        server.EVENTS.clear()
+        status = call_tool(
+            base_url,
+            3,
+            "get_event_status",
+            {"event_id": "disabled-local-event"},
+        )
+        assert status["event_id"] == "disabled-local-event"
+        assert status["results"] == persisted_event["result_previews"]
+
+        replayed = call_tool(
+            base_url,
+            4,
+            "add_memory",
+            {"text": "local memory", "idempotency_key": "local-add-one"},
+        )
+        assert replayed == added
+        assert transport.call_count == 3
+
+
 def test_authenticated_request_reaches_json_rpc():
     authenticator = StubAuthenticator(
         AuthPrincipal(

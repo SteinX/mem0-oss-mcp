@@ -147,8 +147,8 @@ _sidecar_healthy = threading.Event()
 
 def _can_read_event(event: JSON) -> bool:
     principal = current_http_principal()
-    if principal is None:
-        return True  # Trusted in-process calls have no remote principal.
+    if principal is None or principal.mechanism == "disabled":
+        return True
     match event.get("channel"):  # noqa: MATCH_OK -- stored JSON is an open boundary.
         case {"transport": "mcp", "credential_kind": kind, "credential_id": credential_id}:
             return (
@@ -571,7 +571,12 @@ def add_memory(args: JSON) -> JSON:
             body[key] = args[key]
 
     if _uses_sidecar():
-        if current_http_principal() is not None and not Config.sidecar_api_key:
+        principal = current_http_principal()
+        if (
+            principal is not None
+            and principal.mechanism != "disabled"
+            and not Config.sidecar_api_key
+        ):
             raise BackendError(
                 503, "authenticated Sidecar writes require MEM0_SIDECAR_API_KEY"
             )
