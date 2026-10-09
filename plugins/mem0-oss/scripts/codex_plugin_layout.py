@@ -62,11 +62,15 @@ def write_native_oss_adapter(adapter_root: Path, plugin_root: Path) -> None:
 def bind_native_data_directory(plugin_root: Path, data_dir: Path) -> None:
     if not (plugin_root / "core").is_dir():
         return
+    (plugin_root / ".mem0-oss-runtime.json").write_text(
+        json.dumps({"data_dir": str(data_dir)}) + "\n", encoding="utf-8"
+    )
     for name in (".mcp.json", ".codex-mcp.json"):
         path = plugin_root / name
         config = json.loads(path.read_text(encoding="utf-8"))
         for server in config["mcpServers"].values():
-            server.setdefault("env", {})["MEM0_CODE_DATA_DIR"] = str(data_dir)
+            if server.get("command"):
+                server.setdefault("env", {})["MEM0_CODE_DATA_DIR"] = str(data_dir)
         path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
 
 

@@ -9,6 +9,10 @@ import mem0_oss_adapter
 
 
 manifest = Path(__file__).resolve().parent.parent / ".mcp.json"
+runtime_path = manifest.parent / ".mem0-oss-runtime.json"
+if runtime_path.is_file():
+    data_dir = json.loads(runtime_path.read_text(encoding="utf-8"))["data_dir"]
+    os.environ.setdefault("MEM0_CODE_DATA_DIR", data_dir)
 configuration = json.loads(manifest.read_text(encoding="utf-8"))
 for server in configuration["mcpServers"].values():
     environment = server.get("env", {})

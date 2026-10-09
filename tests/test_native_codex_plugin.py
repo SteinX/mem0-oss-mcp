@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from test_codex_plugin_installer import INSTALLER, write_json
 
 
-def test_native_codex_hooks_run_with_private_oss_configuration(tmp_path: Path) -> None:
+@pytest.mark.parametrize("transport", ["stdio", "http"])
+def test_native_codex_hooks_run_with_private_oss_configuration(tmp_path: Path, transport: str) -> None:
     upstream = tmp_path / "upstream" / "integrations" / "codex-plugin"
     write_json(upstream / ".codex-plugin" / "plugin.json", {
         "name": "mem0", "version": "0.3.3", "skills": "./skills/",
@@ -54,13 +58,20 @@ def test_native_codex_hooks_run_with_private_oss_configuration(tmp_path: Path) -
     subprocess.run([
         sys.executable, str(INSTALLER), "--url", "https://oss.example.test/mcp",
         "--name", "mem0", "--with-hooks", "--upstream-plugin-dir", str(upstream),
-        "--env-file", str(env_file), "--marketplace-root", str(marketplace),
+        *(["--env-file", str(env_file)] if transport == "stdio" else []),
+        "--marketplace-root", str(marketplace),
         "--codex-dir", str(codex_dir), "--no-enable-codex-hooks",
     ], check=True, capture_output=True, text=True)
     plugin = marketplace / "plugins" / "mem0"
+    server = json.loads((plugin / ".mcp.json").read_text())["mcpServers"]["mem0"]
+    if transport == "http":
+        assert set(server) == {"url", "bearer_token_env_var"}
+    else:
+        assert server["env"]["MEM0_CODE_DATA_DIR"] == str(codex_dir / "mem0-oss-data" / "mem0")
+    environment = {**os.environ, "MEM0_OSS_MCP_TOKEN": "fixture-client-key"}
     hook_config = json.loads((codex_dir / "hooks.json").read_text())
     command = hook_config["hooks"]["SessionStart"][0]["hooks"][0]["command"]
-    hook = subprocess.run(command, shell=True, check=True, capture_output=True, text=True)
+    hook = subprocess.run(command, shell=True, check=True, capture_output=True, text=True, env=environment)
     result = json.loads(hook.stdout)
 
     assert result["url"] == "https://oss.example.test/mcp"
@@ -78,7 +89,7 @@ def test_native_codex_hooks_run_with_private_oss_configuration(tmp_path: Path) -
 
     standalone = subprocess.run(
         [sys.executable, str(plugin / "core" / "probe.py")],
-        check=True, capture_output=True, text=True,
+        check=True, capture_output=True, text=True, env=environment,
     )
     assert json.loads(standalone.stdout)["key_loaded"] is True
     assert json.loads(standalone.stdout)["adapter"] == "mem0_oss_adapter"
