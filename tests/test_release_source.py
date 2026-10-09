@@ -16,7 +16,7 @@ def workflow_script(step_id: str) -> str:
     start = lines.index(f"        id: {step_id}")
     run = next(i for i in range(start, len(lines)) if lines[i] == "        run: |")
     end = run + 1
-    while end < len(lines) and lines[end].startswith("          "):
+    while end < len(lines) and (not lines[end] or lines[end].startswith("          ")):
         end += 1
     return textwrap.dedent("\n".join(lines[run + 1 : end]))
 
@@ -55,6 +55,7 @@ def verify_source(path: Path, sha: str, tag: str) -> subprocess.CompletedProcess
         },
         capture_output=True,
         text=True,
+        check=False,
     )
 
 

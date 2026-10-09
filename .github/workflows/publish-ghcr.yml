@@ -47,28 +47,13 @@ jobs:
           fi
           echo "sha=$source_sha" >> "$GITHUB_OUTPUT"
 
-      - name: Resolve latest promotion
-        id: latest
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          latest="$PUSH_LATEST"
-          if [ "$GITHUB_EVENT_NAME" = "release" ] && [ "$latest" = "true" ]; then
-            current_tag=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)
-            if [ "$current_tag" != "$RELEASE_TAG" ]; then
-              latest=false
-            fi
-          fi
-          echo "push_latest=$latest" >> "$GITHUB_OUTPUT"
-
       - name: Log in to GHCR
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login "$REGISTRY" -u "${{ github.actor }}" --password-stdin
 
       - name: Build and push image
+        id: build
         env:
           SOURCE_SHA: ${{ steps.source.outputs.sha }}
-          PUSH_LATEST: ${{ steps.latest.outputs.push_latest }}
         run: |
           image="$REGISTRY/${IMAGE_NAME,,}"
           sha_tag="$image:${SOURCE_SHA}"
@@ -84,7 +69,28 @@ jobs:
             docker push "$image:$RELEASE_TAG"
           fi
 
-          if [ "$PUSH_LATEST" = "true" ]; then
-            docker tag "$sha_tag" "$image:latest"
-            docker push "$image:latest"
+      - name: Resolve latest promotion
+        id: latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          latest="$PUSH_LATEST"
+          if [ "$GITHUB_EVENT_NAME" = "release" ] && [ "$latest" = "true" ]; then
+            current_tag=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)
+            if [ "$current_tag" != "$RELEASE_TAG" ]; then
+              latest=false
+            fi
           fi
+          echo "push_latest=$latest" >> "$GITHUB_OUTPUT"
+
+      - name: Promote latest
+        id: promote
+        if: steps.latest.outputs.push_latest == 'true'
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          set -euo pipefail
+          image="$REGISTRY/${IMAGE_NAME,,}"
+          docker tag "$image:$SOURCE_SHA" "$image:latest"
+          docker push "$image:latest"

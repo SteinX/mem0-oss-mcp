@@ -25,7 +25,8 @@ its exact tagged commit. `ghcr.io/steinx/mem0-oss-mcp` receives the Release tag
 and full commit SHA as image tags. Stable releases also update `latest`;
 prereleases do not. Draft releases and Git tag pushes alone do not publish.
 Image publications share a queue, and automatic builds update `latest` only
-while their tag is still GitHub's latest stable Release. A delayed older build
+while their tag is still GitHub's latest stable Release after immutable tags
+are pushed, immediately before promotion. A delayed older build
 preserves the newer alias.
 
 For release tags containing this workflow update, retry publication without
