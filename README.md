@@ -334,9 +334,10 @@ no writes are retried automatically. OSS does not accept the cloud SDK's
 `customCategories`, `rerank`, or `source` body options. Pi attribution headers
 are forwarded; memory inference and optional reranking run on the server.
 Project listing fetches the entity scope and filters `metadata.app_id` locally.
+Single-ID updates and deletes first verify membership in the selected scope.
 Scoped deletion includes expired memories and deletes matching IDs individually,
 never the broader user-level bulk endpoint. A full fetch window is treated as
-potential truncation and stops listing/deletion before any delete. The default
+potential truncation and stops listing and ID mutations before any write. The default
 window is 1000; `MEM0_OSS_LIST_FETCH_LIMIT` can raise it within the Core server's
 configured limit. If a delete fails partway, the error reports completed deletes.
 

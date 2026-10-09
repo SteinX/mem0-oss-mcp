@@ -123,6 +123,29 @@ def patch_sources(plugin: Path, connection: Connection) -> None:
         'const AGENT_ROOT = process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent");',
     )
     config.write_text(content, encoding="utf-8")
+    mutations = (
+        (
+            "memory/tools.ts",
+            "mem0.update(memoryId, { text: params.content })",
+            "mem0.update(memoryId, { text: params.content, filters: resolveSearchFilters(scope, scopeCtx) })",
+        ),
+        (
+            "memory/tools.ts",
+            "mem0.delete(normalizeMemoryId(params.memory_id))",
+            "mem0.delete(normalizeMemoryId(params.memory_id), { filters: resolveSearchFilters(scope, scopeCtx) })",
+        ),
+        (
+            "commands.ts",
+            "mem0.delete(target.id)",
+            "mem0.delete(target.id, { filters: resolveSearchFilters(config.defaultScope, getScopeCtx()) })",
+        ),
+    )
+    for relative, before, after in mutations:
+        path = plugin / "src" / relative
+        content = path.read_text(encoding="utf-8")
+        if before not in content:
+            raise InstallerError(f"unsupported Pi mutation site in {relative}")
+        path.write_text(content.replace(before, after), encoding="utf-8")
 
 
 def parse_args() -> Arguments:
@@ -141,16 +164,8 @@ def parse_args() -> Arguments:
     parser.add_argument("--target-root", type=Path, default=Arguments.target_root)
     parser.add_argument("--upstream-plugin-dir", type=Path, default=Arguments.upstream_plugin_dir)
     parser.add_argument("--pi-dir", type=Path, default=Arguments.pi_dir)
-    parser.add_argument(
-        "--no-build",
-        action="store_true",
-        help="Generate a source extension; Pi supplies host dependencies",
-    )
-    parser.add_argument(
-        "--install",
-        action="store_true",
-        help="Register the local package in Pi settings.json",
-    )
+    parser.add_argument("--no-build", action="store_true", help="Load source directly; Pi supplies host dependencies")
+    parser.add_argument("--install", action="store_true", help="Register the package in Pi settings.json")
     return parser.parse_args(namespace=Arguments())
 
 

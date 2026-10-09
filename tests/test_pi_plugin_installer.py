@@ -45,6 +45,11 @@ import * as path from "node:path";
 const AGENT_ROOT = path.join(os.homedir(), ".pi", "agent");
 export function loadConfig() { return {apiKey: process.env.MEM0_API_KEY}; }
 """)
+    (plugin / "src/memory").mkdir()
+    (plugin / "src/memory/tools.ts").write_text(
+        "mem0.update(memoryId, { text: params.content });\nmem0.delete(normalizeMemoryId(params.memory_id));\n"
+    )
+    (plugin / "src/commands.ts").write_text("mem0.delete(target.id);\n")
     core = root / "integrations/agent-plugin-core/typescript/src"
     core.mkdir(parents=True)
     (core / "lifecycle.ts").write_text("export const shared = true;\n")
@@ -88,6 +93,10 @@ def test_generation_preserves_native_resources_and_keeps_api_key_private(tmp_pat
     assert 'from "./agent-plugin-core/lifecycle.ts"' in source
     assert source.index("initializeMem0OssEnv({") < source.index("const config = loadConfig()")
     assert (plugin / "src/agent-plugin-core/lifecycle.ts").is_file()
+    assert "filters: resolveSearchFilters(scope, scopeCtx)" in (plugin / "src/memory/tools.ts").read_text()
+    assert (
+        "filters: resolveSearchFilters(config.defaultScope, getScopeCtx())" in (plugin / "src/commands.ts").read_text()
+    )
     assert not (plugin / "mem0_oss_memory_client.ts").exists()
     assert "MEM0_OSS_MCP" not in (plugin / "mem0_oss_pi_client.ts").read_text()
     env_file = tmp_path / "generated/env/mem0-oss.env"

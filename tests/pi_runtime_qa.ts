@@ -20,7 +20,7 @@ process.env.MEM0_USER_ID = user;
 process.env.MEM0_TELEMETRY = "false";
 
 type WireCall = { readonly method: string; readonly path: string; readonly body: Record<string, unknown>; readonly query: URLSearchParams };
-type Row = { readonly id: string; readonly memory: string; readonly metadata: Record<string, string> | null; readonly created_at?: string | null; readonly score?: number | null };
+type Row = { readonly id: string; readonly memory: string; readonly metadata: Record<string, string> | null; readonly created_at?: string | null; readonly score?: number | null; readonly run_id?: string };
 const calls: WireCall[] = [];
 const rows: Row[] = [
   { id: "foreign", memory: "other project", metadata: { app_id: "other-project" } },
@@ -51,7 +51,8 @@ const fixture = live ? undefined : Bun.serve({
     }
     if (url.pathname === "/memories" && request.method === "GET") {
       assert.equal(url.searchParams.get("user_id"), user);
-      return Response.json({ results: saturatedList ? Array.from({ length: 1000 }, () => rows[0]) : rows });
+      const scopedRows = rows.filter((row) => !url.searchParams.get("run_id") || row.run_id === url.searchParams.get("run_id"));
+      return Response.json({ results: saturatedList ? Array.from({ length: 1000 }, () => rows[0]) : scopedRows });
     }
     if (url.pathname === "/memories" && request.method === "POST") {
       assert.equal(body["user_id"], user);
@@ -59,7 +60,8 @@ const fixture = live ? undefined : Bun.serve({
       assert(Array.isArray(body["messages"]));
       const message: unknown = body["messages"][0];
       assert(isRecord(message) && typeof message["content"] === "string");
-      const row = { id: `fixture-${rows.length}`, memory: message["content"], metadata: { app_id: body["metadata"]["app_id"] } };
+      const row = { id: `fixture-${rows.length}`, memory: message["content"], metadata: { app_id: body["metadata"]["app_id"] },
+        ...(typeof body["run_id"] === "string" ? { run_id: body["run_id"] } : {}) };
       rows.push(row);
       return Response.json({ results: [{ ...row, event: "ADD" }] });
     }
@@ -116,18 +118,42 @@ try {
     assert(captured && !JSON.stringify(captured.body["messages"]).includes("fixture-secret"));
     assert.deepEqual(captured.body["metadata"], { app_id: app });
     await assert.rejects(tool.execute("qa", { action: "search", query: "fixture", scope: "global" }, undefined, undefined, context), /global/i);
+    const projectOnly = rows.find((row) => row.metadata?.["app_id"] === app && !row.run_id);
+    assert(projectOnly);
     await session.prompt("/mem0-scope session");
     await tool.execute("qa", { action: "search", query: "fixture" }, undefined, undefined, context);
     const scoped = calls.at(-1)?.body["filters"];
     assert(isRecord(scoped) && typeof scoped["run_id"] === "string");
+    const sessionMutations = calls.filter((call) => call.method === "PUT" || call.method === "DELETE").length;
+    for (const action of ["update", "delete"] as const) {
+      for (const id of [projectOnly.id, "foreign"]) {
+        await assert.rejects(tool.execute("qa", { action, memory_id: id, content: "forbidden" },
+          undefined, undefined, context), /scope/);
+      }
+    }
+    assert.equal(calls.filter((call) => call.method === "PUT" || call.method === "DELETE").length, sessionMutations);
+    await tool.execute("qa", { action: "add", content: "session fact" }, undefined, undefined, context);
+    const sessionRow = rows.find((row) => row.memory === "session fact");
+    assert(sessionRow?.run_id);
+    await tool.execute("qa", { action: "update", memory_id: sessionRow.id, content: "session updated" }, undefined, undefined, context);
+    await tool.execute("qa", { action: "delete", memory_id: sessionRow.id }, undefined, undefined, context);
     await session.prompt("/mem0-scope project");
+    const projectMutations = calls.filter((call) => call.method === "PUT" || call.method === "DELETE").length;
+    for (const action of ["update", "delete"] as const) {
+      await assert.rejects(tool.execute("qa", { action, memory_id: "foreign", content: "forbidden" },
+        undefined, undefined, context), /scope/);
+    }
+    assert.equal(calls.filter((call) => call.method === "PUT" || call.method === "DELETE").length, projectMutations);
     const own = rows.find((row) => row.metadata?.["app_id"] === app);
     assert(own);
     await tool.execute("qa", { action: "update", memory_id: own.id, content: "updated fact" }, undefined, undefined, context);
     const listed = await tool.execute("qa", { action: "get_all" }, undefined, undefined, context);
     assert(textOf(listed).includes("updated fact") && !textOf(listed).includes("other project"));
+    await assert.rejects(tool.execute("qa", { action: "update", memory_id: "foreign", content: "forbidden", scope: "global" },
+      undefined, undefined, context), /global/i);
     await session.prompt("/mem0-scope global");
     assert(textOf(await tool.execute("qa", { action: "get_all" }, undefined, undefined, context)).includes("legacy global fact"));
+    await tool.execute("qa", { action: "update", memory_id: "foreign", content: "other project" }, undefined, undefined, context);
     await session.prompt("/mem0-scope project");
     saturatedList = true;
     const before = calls.filter((call) => call.method === "DELETE").length;
@@ -144,7 +170,7 @@ try {
     await assert.rejects(tool.execute("qa", { action: "search", query: "fixture" }, undefined, undefined, context), /HTTP 401/);
     rejectRequests = false;
     console.log(JSON.stringify({ mode: "fixture", transport: "REST", pi: "1.1.0", requests: calls.length,
-      recall: "passed", capture: "passed", scopes: "passed", crud: "passed", failures: "passed", project_delete: "isolated" }));
+      recall: "passed", capture: "passed", scopes: "passed", crud: "passed", failures: "passed", project_delete: "isolated", id_mutations: "scoped" }));
   } else {
     const marker = `Pi direct OSS canary ${user}`;
     try {

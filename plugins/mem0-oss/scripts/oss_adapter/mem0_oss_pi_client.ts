@@ -126,7 +126,7 @@ export default class PiMemoryClient {
     }
     const all = memories(await this.request("GET", `/memories?${query}`));
     if (all.length >= this.listLimit) {
-      throw new Mem0RestError("Mem0 OSS list may be truncated; increase MEM0_OSS_LIST_FETCH_LIMIT within the server limit. No deletion attempted.");
+      throw new Mem0RestError("Mem0 OSS list may be truncated; increase MEM0_OSS_LIST_FETCH_LIMIT within the server limit. No mutation attempted.");
     }
     const results = filters["app_id"]
       ? all.filter((memory) => memory.metadata?.["app_id"] === filters["app_id"])
@@ -138,12 +138,21 @@ export default class PiMemoryClient {
     return this.list(options.filters ?? {});
   }
 
-  async update(id: string, options: { readonly text: string }) {
-    await this.request("PUT", `/memories/${encodeURIComponent(id)}`, options);
+  private async requireScopedMemory(id: string, filters: Record<string, string>): Promise<void> {
+    const { results } = await this.list(filters, true);
+    if (!results.some((memory) => memory.id === id)) {
+      throw new Mem0RestError("Memory is absent or outside the selected scope");
+    }
+  }
+
+  async update(id: string, options: { readonly text: string; readonly filters: Record<string, string> }) {
+    await this.requireScopedMemory(id, options.filters);
+    await this.request("PUT", `/memories/${encodeURIComponent(id)}`, { text: options.text });
     return { status: "Memory updated." };
   }
 
-  async delete(id: string) {
+  async delete(id: string, options: { readonly filters: Record<string, string> }) {
+    await this.requireScopedMemory(id, options.filters);
     await this.request("DELETE", `/memories/${encodeURIComponent(id)}`);
     return { message: "Memory deleted." };
   }
@@ -153,7 +162,7 @@ export default class PiMemoryClient {
     let deleted = 0;
     for (const memory of results) {
       try {
-        await this.delete(memory.id);
+        await this.request("DELETE", `/memories/${encodeURIComponent(memory.id)}`);
         deleted += 1;
       } catch (error) {
         if (error instanceof Error) {
