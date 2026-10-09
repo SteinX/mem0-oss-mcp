@@ -19,11 +19,15 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
   RELEASE_TAG: ${{ github.event.release.tag_name || (github.ref_type == 'tag' && github.ref_name) || '' }}
-  PUSH_LATEST: ${{ (github.event_name == 'release' && !github.event.release.prerelease) || (github.event_name == 'workflow_dispatch' && (github.ref == 'refs/heads/main' || inputs.push_latest)) }}
+  PUSH_LATEST: ${{ (github.event_name == 'release' && !github.event.release.prerelease) || (github.event_name == 'workflow_dispatch' && (github.ref == 'refs/heads/main' || (github.ref_type == 'tag' && inputs.push_latest))) }}
 
 jobs:
   publish:
     runs-on: ubuntu-latest
+    concurrency:
+      group: mcp-image-publication
+      cancel-in-progress: false
+      queue: max
 
     steps:
       - name: Check out repository
@@ -43,12 +47,28 @@ jobs:
           fi
           echo "sha=$source_sha" >> "$GITHUB_OUTPUT"
 
+      - name: Resolve latest promotion
+        id: latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          latest="$PUSH_LATEST"
+          if [ "$GITHUB_EVENT_NAME" = "release" ] && [ "$latest" = "true" ]; then
+            current_tag=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)
+            if [ "$current_tag" != "$RELEASE_TAG" ]; then
+              latest=false
+            fi
+          fi
+          echo "push_latest=$latest" >> "$GITHUB_OUTPUT"
+
       - name: Log in to GHCR
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login "$REGISTRY" -u "${{ github.actor }}" --password-stdin
 
       - name: Build and push image
         env:
           SOURCE_SHA: ${{ steps.source.outputs.sha }}
+          PUSH_LATEST: ${{ steps.latest.outputs.push_latest }}
         run: |
           image="$REGISTRY/${IMAGE_NAME,,}"
           sha_tag="$image:${SOURCE_SHA}"

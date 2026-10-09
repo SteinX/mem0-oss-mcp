@@ -4,7 +4,7 @@ import textwrap
 from pathlib import Path
 
 import pytest
-from test_release_source import WORKFLOW
+from test_release_source import WORKFLOW, workflow_script
 
 
 def build_script() -> str:
@@ -72,3 +72,42 @@ def test_release_and_manual_tag_source_settings() -> None:
     )
     assert "github.event_name == 'workflow_dispatch'" in workflow
     assert "github.ref == 'refs/heads/main'" in workflow
+    assert "github.ref_type == 'tag' && inputs.push_latest" in workflow
+    assert "group: mcp-image-publication" in workflow
+    assert "queue: max" in workflow
+
+
+@pytest.mark.parametrize(
+    ("event", "requested", "current_tag", "expected"),
+    [
+        ("release", True, "0.1.6", True),
+        ("release", True, "0.1.7", False),
+        ("release", False, "0.1.7", False),
+        ("workflow_dispatch", True, "0.1.7", True),
+    ],
+)
+def test_latest_promotion_checks_the_current_release(
+    tmp_path: Path, event: str, requested: bool, current_tag: str, expected: bool
+) -> None:
+    gh = tmp_path / "gh"
+    gh.write_text('#!/bin/bash\nprintf "%s\\n" "$CURRENT_TAG"\n')
+    gh.chmod(0o755)
+    output = tmp_path / "output"
+    result = subprocess.run(
+        ["bash", "-e", "-o", "pipefail", "-c", workflow_script("latest")],
+        env={
+            **os.environ,
+            "PATH": f"{tmp_path}:{os.environ['PATH']}",
+            "GITHUB_EVENT_NAME": event,
+            "GITHUB_REPOSITORY": "SteinX/mem0-oss-mcp",
+            "PUSH_LATEST": str(requested).lower(),
+            "RELEASE_TAG": "0.1.6",
+            "CURRENT_TAG": current_tag,
+            "GITHUB_OUTPUT": str(output),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert output.read_text().strip() == f"push_latest={str(expected).lower()}"
