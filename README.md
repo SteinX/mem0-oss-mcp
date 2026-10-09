@@ -342,7 +342,13 @@ Scoped deletion includes expired memories and deletes matching IDs individually,
 never the broader user-level bulk endpoint. A full fetch window is treated as
 potential truncation and stops listing and ID mutations before any write. The default
 window is 1000; `MEM0_OSS_LIST_FETCH_LIMIT` can raise it within the Core server's
-configured limit. If a delete fails partway, the error reports completed deletes.
+configured limit. Multi-row lists also probe `top_k=1`; a backend ignoring the
+limit stops listing and mutations. A returned count matching the configured
+legacy cap is treated as potentially incomplete when a larger window was
+requested. `MEM0_OSS_BACKEND_LIST_RETRY_LIMIT` sets that cap (default 1000),
+matching the bridge's configuration; in Pi it never enables retries. Set it to
+the known cap for other backends. If a delete fails partway, the error reports
+completed deletes.
 
 ## Run
 

@@ -75,14 +75,19 @@ export default class PiMemoryClient {
   readonly apiKey: string;
   private readonly baseUrl: string;
   private readonly listLimit: number;
+  private readonly legacyListCap: number;
 
   constructor(options: { readonly apiKey: string }) {
     this.apiKey = options.apiKey;
     this.baseUrl = validateRestBaseUrl(process.env.MEM0_OSS_BASE_URL || "");
     if (!this.baseUrl || !this.apiKey) throw new Mem0RestError("Mem0 OSS base URL and API key are required");
     this.listLimit = Number(process.env.MEM0_OSS_LIST_FETCH_LIMIT || "1000");
+    this.legacyListCap = Number(process.env.MEM0_OSS_BACKEND_LIST_RETRY_LIMIT || "1000");
     if (!Number.isInteger(this.listLimit) || this.listLimit <= 0) {
       throw new Mem0RestError("MEM0_OSS_LIST_FETCH_LIMIT must be a positive integer");
+    }
+    if (!Number.isInteger(this.legacyListCap) || this.legacyListCap <= 0) {
+      throw new Mem0RestError("MEM0_OSS_BACKEND_LIST_RETRY_LIMIT must be a positive integer");
     }
   }
 
@@ -128,6 +133,16 @@ export default class PiMemoryClient {
     const all = memories(await this.request("GET", `/memories?${query}`));
     if (all.length >= this.listLimit) {
       throw new Mem0RestError("Mem0 OSS list may be truncated; increase MEM0_OSS_LIST_FETCH_LIMIT within the server limit. No mutation attempted.");
+    }
+    if (all.length > 1) {
+      query.set("top_k", "1");
+      const probe = memories(await this.request("GET", `/memories?${query}`));
+      if (probe.length !== 1) {
+        throw new Mem0RestError("Mem0 OSS backend did not honor list limit top_k=1. No mutation attempted.");
+      }
+    }
+    if (this.listLimit > this.legacyListCap && all.length === this.legacyListCap) {
+      throw new Mem0RestError("Mem0 OSS list may be truncated at the configured legacy cap. No mutation attempted.");
     }
     const results = filters["app_id"]
       ? all.filter((memory) => memory.metadata?.["app_id"] === filters["app_id"])

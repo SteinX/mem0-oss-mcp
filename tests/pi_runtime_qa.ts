@@ -52,7 +52,7 @@ const fixture = live ? undefined : Bun.serve({
     if (url.pathname === "/memories" && request.method === "GET") {
       assert.equal(url.searchParams.get("user_id"), user);
       const scopedRows = rows.filter((row) => !url.searchParams.get("run_id") || row.run_id === url.searchParams.get("run_id"));
-      return Response.json({ results: saturatedList ? Array.from({ length: 1000 }, () => rows[0]) : scopedRows });
+      return Response.json({ results: saturatedList ? Array.from({ length: 1000 }, () => rows[0]) : scopedRows.slice(0, Number(url.searchParams.get("top_k"))) });
     }
     if (url.pathname === "/memories" && request.method === "POST") {
       assert.equal(body["user_id"], user);
