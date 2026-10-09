@@ -89,7 +89,7 @@ def test_install_preserves_settings_and_registers_package_once(
     # When installation is repeated with source loading enabled.
     for _ in range(2):
         result = run_installer(
-            tmp_path, upstream, "--install", "--pi-dir", str(agent_dir)
+            tmp_path, pi_upstream, "--install", "--pi-dir", str(agent_dir)
         )
         assert result.returncode == 0, result.stderr
     # Then unrelated settings remain and the local package is registered once.
@@ -169,7 +169,7 @@ def test_credentials_inside_package_are_rejected(
     env_file = tmp_path / "generated/mem0-oss/secret.env"
     # When the user selects that path.
     result = run_installer(
-        tmp_path, upstream, "--api-key-stdin", "--env-file", str(env_file)
+        tmp_path, pi_upstream, "--api-key-stdin", "--env-file", str(env_file)
     )
     # Then generation stops before writing credentials.
     assert result.returncode == 1
