@@ -21,6 +21,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
+from codex_plugin_layout import (
+    bind_native_data_directory,
+    hook_template_path,
+    native_hook_variables,
+    upstream_plugin_directory,
+    write_native_oss_adapter,
+)
 
 DEFAULT_MARKETPLACE_NAME = "mem0-oss-local"
 DEFAULT_TOKEN_ENV_VAR = "MEM0_OSS_MCP_TOKEN"
@@ -79,17 +86,11 @@ def repo_root_from_script() -> Path:
 
 
 def default_upstream_plugin_dir() -> Path:
-    return repo_root_from_script() / "third_party" / "mem0" / UPSTREAM_PLUGIN_SUBDIR
+    return repo_root_from_script() / "third_party" / "mem0"
 
 
 def validate_upstream_plugin_dir(path: Path) -> Path:
-    plugin_dir = path.expanduser().resolve()
-    if (plugin_dir / ".codex-plugin" / "plugin.json").is_file():
-        return plugin_dir
-    nested = plugin_dir / UPSTREAM_PLUGIN_SUBDIR
-    if (nested / ".codex-plugin" / "plugin.json").is_file():
-        return nested.resolve()
-    raise ValueError(f"not a Mem0 plugin directory: {path}")
+    return upstream_plugin_directory(path)
 
 
 def copy_plugin(source: Path, target: Path) -> None:
@@ -140,7 +141,7 @@ def iter_hook_commands(config: dict):
 def update_plugin_manifest(plugin_root: Path, plugin_name: str, display_name: str) -> None:
     manifest_path = plugin_root / ".codex-plugin" / "plugin.json"
     manifest = load_json(manifest_path)
-    base_version = str(manifest.get("version", "0.1.4")).split("+", 1)[0]
+    base_version = str(manifest.get("version", "0.1.5")).split("+", 1)[0]
     cachebuster = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
 
     manifest["name"] = plugin_name
@@ -292,6 +293,7 @@ def write_oss_adapter(source_root: Path, plugin_root: Path) -> None:
     copy_adapter_file(adapter_root / "sitecustomize.py", scripts_dir / "sitecustomize.py")
     copy_adapter_file(adapter_root / "mem0_oss_env.sh", scripts_dir / "mem0_oss_env.sh", executable=True)
     write_stdio_bridge(source_root, plugin_root)
+    write_native_oss_adapter(adapter_root, plugin_root)
 
     # The upstream categories helper uses hosted Platform project APIs that OSS
     # does not expose. Keep auto_import.py intact: its urllib calls are routed
@@ -414,8 +416,9 @@ def load_hook_template(
     url: str,
     token_env_var: str,
     env_file: Path | None,
+    plugin_data_dir: Path | None = None,
 ) -> dict:
-    template_path = plugin_root / "hooks" / HOOK_TEMPLATE
+    template_path = hook_template_path(plugin_root)
     template = load_json(template_path)
     rewrite_hook_matchers(template, plugin_name, server_name)
 
@@ -429,13 +432,17 @@ def load_hook_template(
     ]
     if env_file is not None:
         prelude_parts.append(f"export {command_env('MEM0_OSS_ENV_FILE', str(env_file))}")
+    native = (plugin_root / "core").is_dir()
+    if native:
+        prelude_parts.extend(native_hook_variables(plugin_root, plugin_data_dir or Path.home() / ".mem0/codex-plugin"))
     prelude_parts.append(f". {shlex.quote(str(scripts_dir / 'mem0_oss_env.sh'))}")
     prelude = "; ".join(prelude_parts)
 
     for hook in iter_hook_commands(template):
         command = hook.get("command")
         if isinstance(command, str):
-            command = command.replace("${PLUGIN_ROOT}", shlex.quote(str(plugin_root)))
+            if not native:
+                command = command.replace("${PLUGIN_ROOT}", shlex.quote(str(plugin_root)))
             hook["command"] = f"bash -c {shlex.quote(prelude + '; ' + command)}"
     return template
 
@@ -519,7 +526,10 @@ def install_hooks(
     hooks_file = codex_dir / "hooks.json"
     config = load_hooks(hooks_file)
     rewrite_hook_script_tool_names(plugin_root, plugin_name, server_name)
-    template = load_hook_template(plugin_root, plugin_name, server_name, url, token_env_var, env_file)
+    template = load_hook_template(
+        plugin_root, plugin_name, server_name, url, token_env_var, env_file,
+        codex_dir / "mem0-oss-data" / plugin_name,
+    )
     config = strip_owned_hooks(config, plugin_name, plugin_root)
     config = merge_hooks(config, template)
     write_json(hooks_file, config)
@@ -633,6 +643,7 @@ def main() -> int:
 
     update_plugin_manifest(target_root, plugin_name, display_name)
     mcp_transport = write_mcp_config(target_root, server_name, url, token_env_var, env_file, mcp_transport)
+    bind_native_data_directory(target_root, codex_dir / "mem0-oss-data" / plugin_name)
     marketplace_path = update_marketplace(marketplace_root, marketplace_name, plugin_name)
     hooks_path: Path | None = None
 

@@ -5,6 +5,19 @@ Small MCP bridge for the self-hosted Mem0 OSS server from `mem0ai/mem0/server`.
 It exposes the Mem0 MCP tool names expected by Codex and forwards them to a
 self-hosted Mem0 REST API.
 
+`add_memory` accepts an optional `idempotency_key` (1–128 visible ASCII
+characters) when a Sidecar backend is configured. The bridge forwards it as
+the Sidecar `Idempotency-Key` header. Reusing the key with the same payload
+returns the recorded result; a different payload conflicts. Direct Core mode
+rejects this option because it cannot provide the durable Sidecar contract.
+
+Added memories use the Sidecar's persisted event ID. Event status remains
+queryable after a bridge restart. The bridge authenticates the client as usual
+and reads only that event's bounded status/results within its configured
+project using its private operator credential; this read omits caller
+attribution because Sidecar's event endpoint requires an operator principal.
+Memory operations continue forwarding the original caller attribution.
+
 ## Configuration
 
 ```env
@@ -114,6 +127,15 @@ a private application network and publish remote MCP only through an HTTPS
 reverse proxy or gateway.
 
 ## Codex plugin
+
+The full-experience generator supports the current official
+`integrations/codex-plugin` shared-runtime layout and the earlier
+`integrations/mem0-plugin` layout. It pins its upstream submodule to Mem0
+v2.2.1. Native hooks and standalone CLI workers load the same private OSS
+credentials; project recall retains the existing user/app boundary. The
+generated plugin uses global Codex hooks once, and its manifest omits native
+hooks to avoid duplicate lifecycle execution. Search and explicit remember
+skills use the OSS bridge's scoped tool parameters.
 
 This repository also publishes a Codex plugin marketplace at
 `.agents/plugins/marketplace.json`.

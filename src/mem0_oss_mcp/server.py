@@ -184,6 +184,8 @@ def _sidecar_backend(
     path: str,
     body: JSON | None = None,
     query: JSON | None = None,
+    *,
+    idempotency_key: str | None = None,
 ) -> Any:
     if not Config.sidecar_base_url:
         raise BackendError(500, "MEM0_SIDECAR_BASE_URL is not set")
@@ -196,10 +198,13 @@ def _sidecar_backend(
 
     data = None
     headers = {"Accept": "application/json"}
+    if idempotency_key is not None:
+        headers["Idempotency-Key"] = idempotency_key
     if Config.sidecar_api_key:
         headers["X-API-Key"] = Config.sidecar_api_key
         caller_context = encode_current_caller_context()
-        if caller_context is not None:
+        operator_status_read = method == "GET" and path.startswith("/v1/event/")
+        if caller_context is not None and not operator_status_read:
             headers[CALLER_CONTEXT_HEADER] = caller_context
     if body is not None:
         data = json.dumps(body).encode("utf-8")
@@ -514,6 +519,16 @@ def _backend_honors_list_limit(query: JSON) -> bool:
 
 
 def add_memory(args: JSON) -> JSON:
+    idempotency_key = args.get("idempotency_key")
+    if idempotency_key is not None:
+        if (
+            not isinstance(idempotency_key, str)
+            or not 1 <= len(idempotency_key) <= 128
+            or any(ord(char) < 33 or ord(char) > 126 for char in idempotency_key)
+        ):
+            raise ValueError("idempotency_key must be visible ASCII of 1-128 characters")
+        if not _uses_sidecar():
+            raise ValueError("idempotency_key requires the durable sidecar backend")
     text = args.get("text") or args.get("content")
     messages = args.get("messages")
     if not messages:
@@ -548,14 +563,20 @@ def add_memory(args: JSON) -> JSON:
                 "project_id": Config.sidecar_project_id,
                 "app_id": app_id,
             },
+            **({"idempotency_key": idempotency_key} if idempotency_key is not None else {}),
         )
     else:
         result = _backend("POST", "/memories", body)
-    event_id = str(uuid.uuid4())
+    sidecar_event = result.get("event", {}) if _uses_sidecar() and isinstance(result, dict) else {}
+    event_id = str(sidecar_event.get("id") or uuid.uuid4())
+    memory_result = result.get("memory", result) if isinstance(result, dict) else {}
+    results = memory_result.get("results", []) if isinstance(memory_result, dict) else []
     event = {
         "event_id": event_id,
         "status": "SUCCEEDED",
         "result": result,
+        "results": results,
+        "result_count": len(results),
         "memory_id": _extract_memory_id(result),
         "created_at": time.time(),
     }
@@ -968,6 +989,19 @@ def get_event_status(args: JSON) -> JSON:
     if not event_id:
         raise ValueError("get_event_status requires event_id")
     if event_id not in EVENTS:
+        if _uses_sidecar():
+            event = _sidecar_backend(
+                "GET",
+                f"/v1/event/{quote(str(event_id), safe='')}",
+                query={"project_id": Config.sidecar_project_id, "project_wide": True},
+            )
+            return {
+                "event_id": event_id,
+                "status": event["status"],
+                "memory_id": event.get("subject_id"),
+                "results": event.get("result_previews", []),
+                "result_count": event.get("result_count", 0),
+            }
         raise ValueError(f"event not found: {event_id}")
     return EVENTS[event_id]
 
@@ -1008,6 +1042,7 @@ def tool_schema() -> list[JSON]:
                     "text": {"type": "string"},
                     "messages": {"type": "array"},
                     "infer": {"type": "boolean"},
+                    "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 128},
                     "expiration_date": {"type": "string"},
                     **common,
                 }
