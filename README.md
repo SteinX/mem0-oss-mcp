@@ -311,7 +311,8 @@ in Pi's environment. Pi's usual `mem0-config.json` API key is also supported.
 `--install` adds the absolute package path to Pi's `settings.json` without
 changing other settings or duplicating entries. Existing packages are retained
 as timestamped backups; a failed build leaves the active package and settings
-unchanged.
+unchanged. Settings are replaced atomically; a failed settings commit restores
+the previous package and credentials.
 
 Building requires pnpm and the upstream development dependencies. Use
 `--no-build` for Pi's direct TypeScript loading, which uses Pi's host packages.

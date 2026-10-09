@@ -12,8 +12,10 @@ import argparse
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
+from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -137,16 +139,8 @@ def parse_args() -> Arguments:
     tokens.add_argument("--api-key", help="API key value; prefer --api-key-stdin to avoid process listings")
     parser.add_argument("--env-file", type=Path)
     parser.add_argument("--target-root", type=Path, default=Arguments.target_root)
-    parser.add_argument(
-        "--upstream-plugin-dir",
-        type=Path,
-        default=Arguments.upstream_plugin_dir,
-    )
-    parser.add_argument(
-        "--pi-dir",
-        type=Path,
-        default=Arguments.pi_dir,
-    )
+    parser.add_argument("--upstream-plugin-dir", type=Path, default=Arguments.upstream_plugin_dir)
+    parser.add_argument("--pi-dir", type=Path, default=Arguments.pi_dir)
     parser.add_argument(
         "--no-build",
         action="store_true",
@@ -183,8 +177,14 @@ def main() -> int:
     packages = settings.get("packages", [])
     if not isinstance(packages, list):
         raise InstallerError("Pi settings packages must be a list")
+    if args.install:
+        if not any(
+            entry == str(target) or isinstance(entry, dict) and entry.get("source") == str(target) for entry in packages
+        ):
+            packages.append(str(target))
+        settings["packages"] = packages
     base.mkdir(parents=True, exist_ok=True)
-    with TemporaryDirectory(prefix=f".{name}-", dir=base) as staging_dir:
+    with TemporaryDirectory(prefix=f".{name}-", dir=base) as staging_dir, ExitStack() as cleanup:
         staging = Path(staging_dir) / "plugin"
         copy_plugin(source, staging)
         shutil.copytree(
@@ -209,20 +209,43 @@ def main() -> int:
                 check=True,
             )
             subprocess.run(["pnpm", "run", "build"], cwd=staging, check=True)
-        if token is not None and env_file is not None:
-            write_token_env_file(env_file, connection.api_key_env_var, token)
-        if target.exists():
-            backup = target.with_name(f"{name}.backup.{stamp}")
-            target.rename(backup)
+        staged_settings = None
+        if args.install:
+            settings_path.parent.mkdir(parents=True, exist_ok=True)
+            settings_dir = cleanup.enter_context(TemporaryDirectory(prefix=".mem0-settings-", dir=settings_path.parent))
+            staged_settings = Path(settings_dir) / "settings.json"
+            write_json(staged_settings, settings)
+            staged_settings.chmod(stat.S_IMODE(settings_path.stat().st_mode) if settings_path.exists() else 0o600)
+        previous_key = (
+            env_file.read_bytes() if token is not None and env_file is not None and env_file.exists() else None
+        )
+        previous_mode = stat.S_IMODE(env_file.stat().st_mode) if env_file is not None and env_file.exists() else 0o600
+        backup = target.with_name(f"{name}.backup.{stamp}") if target.exists() else None
+        promoted = False
+        try:
+            if token is not None and env_file is not None:
+                write_token_env_file(env_file, connection.api_key_env_var, token)
+            if backup is not None:
+                target.rename(backup)
+            staging.rename(target)
+            promoted = True
+            if staged_settings is not None:
+                staged_settings.replace(settings_path)
+        except OSError:
+            if promoted:
+                target.rename(staging)
+            if backup is not None and backup.exists():
+                backup.rename(target)
+            if token is not None and env_file is not None:
+                if previous_key is None:
+                    env_file.unlink(missing_ok=True)
+                else:
+                    env_file.write_bytes(previous_key)
+                    env_file.chmod(previous_mode)
+            raise
+        if backup is not None:
             print(f"Previous package retained: {backup}")
-        staging.rename(target)
     if args.install:
-        if not any(
-            entry == str(target) or isinstance(entry, dict) and entry.get("source") == str(target) for entry in packages
-        ):
-            packages.append(str(target))
-        settings["packages"] = packages
-        write_json(settings_path, settings)
         print(f"Registered Pi package in: {settings_path}")
     print(f"Generated Pi OSS plugin: {target}")
     print(f"OSS REST URL: {connection.url}")

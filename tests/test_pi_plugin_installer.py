@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import importlib
+import io
 import json
 import os
 import stat
@@ -191,3 +193,74 @@ def test_invalid_url_does_not_create_target(tmp_path: Path, upstream: Path, url:
     assert "--url must be" in result.stderr
     assert "secret" not in result.stdout + result.stderr
     assert not (tmp_path / "generated").exists()
+
+
+def test_settings_failure_preserves_existing_package(tmp_path: Path, upstream: Path) -> None:
+    # Given an existing package and a Pi settings location that is not a directory.
+    marker = tmp_path / "generated/mem0-oss/keep.txt"
+    marker.parent.mkdir(parents=True)
+    marker.write_text("active package")
+    agent_dir = tmp_path / "agent"
+    agent_dir.write_text("keep settings location")
+    # When installation cannot persist Pi settings.
+    result = run_installer(tmp_path, upstream, "--install", "--pi-dir", str(agent_dir))
+    # Then the original active package and settings location remain intact.
+    assert result.returncode == 1
+    assert marker.read_text() == "active package"
+    assert agent_dir.read_text() == "keep settings location"
+
+
+def test_settings_commit_failure_rolls_back_package_and_key(
+    tmp_path: Path, upstream: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given active package, settings, and private credentials.
+    marker = tmp_path / "generated/mem0-oss/keep.txt"
+    marker.parent.mkdir(parents=True)
+    marker.write_text("active package")
+    agent_dir = tmp_path / "agent"
+    agent_dir.mkdir()
+    settings = agent_dir / "settings.json"
+    settings.write_text('{"packages":["existing"]}')
+    env_file = tmp_path / "key.env"
+    env_file.write_text("MEM0_OSS_API_KEY=old-fixture-key\n")
+    env_file.chmod(0o600)
+    original_replace = Path.replace
+
+    def fail_settings_replace(path: Path, target: str | os.PathLike[str]) -> Path:
+        if Path(target) == settings:
+            raise OSError("fixture settings commit failure")
+        return original_replace(path, target)
+
+    monkeypatch.syspath_prepend(str(INSTALLER.parent))
+    installer = importlib.import_module("install_pi_plugin")
+    monkeypatch.setattr(Path, "replace", fail_settings_replace)
+    monkeypatch.setattr(sys, "stdin", io.StringIO("new-fixture-key"))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            str(INSTALLER),
+            "--url",
+            "https://mem0.test",
+            "--upstream-plugin-dir",
+            str(upstream),
+            "--target-root",
+            str(tmp_path / "generated"),
+            "--no-build",
+            "--install",
+            "--pi-dir",
+            str(agent_dir),
+            "--api-key-stdin",
+            "--env-file",
+            str(env_file),
+        ],
+    )
+    # When the final settings replacement fails after package promotion.
+    with pytest.raises(OSError, match="fixture settings commit failure"):
+        installer.main()
+    # Then all active state is restored and failed staging/backups are removed.
+    assert marker.read_text() == "active package"
+    assert settings.read_text() == '{"packages":["existing"]}'
+    assert env_file.read_text() == "MEM0_OSS_API_KEY=old-fixture-key\n"
+    assert stat.S_IMODE(env_file.stat().st_mode) == 0o600
+    assert not list((tmp_path / "generated").glob("mem0-oss.backup.*"))
