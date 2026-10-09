@@ -322,7 +322,9 @@ semantics, including IDNA validation. Building also requires pnpm and the
 upstream development dependencies. Use
 `--no-build` for Pi's direct TypeScript loading, which uses Pi's host packages.
 `--pi-dir` selects the settings directory; set `PI_CODING_AGENT_DIR` at runtime
-to use that directory. Restart Pi or run `/reload` after installation. Avoid
+to use that directory. Restart Pi or run `/reload` after installation. Regenerating
+and reloading refreshes the configured endpoint and file-backed key; explicit
+runtime overrides remain in effect. Avoid
 loading the cloud Mem0 package and this OSS copy in the same session, because
 they register the same tools and commands.
 

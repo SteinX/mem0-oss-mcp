@@ -1,9 +1,53 @@
 import assert from "node:assert/strict";
-import Client from "../plugins/mem0-oss/scripts/oss_adapter/mem0_oss_pi_client.ts";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import Client, { initializeMem0OssEnv } from "../plugins/mem0-oss/scripts/oss_adapter/mem0_oss_pi_client.ts";
 
 for (const url of ["http://foo％bar", "http://%EF%BC%8F.test", "http://mem0%7F.test", "http://a٠b.test"]) {
   process.env.MEM0_OSS_BASE_URL = url;
   assert.throws(() => new Client({ apiKey: "list-fixture-key" }), /base URL/);
+}
+
+const reloadRoot = mkdtempSync(join(tmpdir(), "pi-reload-"));
+const envFile = join(reloadRoot, "key.env");
+const reloadCalls: { readonly url: string; readonly key: string | null }[] = [];
+function reloadResponse(request: Request): Response {
+  reloadCalls.push({ url: request.url, key: request.headers.get("x-api-key") });
+  return Response.json({ results: [] });
+}
+const oldEndpoint = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: reloadResponse });
+const newEndpoint = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: reloadResponse });
+const reloadVars = ["MEM0_OSS_BASE_URL", "MEM0_OSS_API_KEY", "MEM0_API_KEY", "MEM0_OSS_PI_RESOLVED_BASE_URL", "MEM0_OSS_PI_RESOLVED_API_KEY"];
+for (const name of reloadVars) delete process.env[name];
+process.env.MEM0_OSS_ENV_FILE = envFile;
+try {
+  for (const [url, key] of [
+    [`http://127.0.0.1:${oldEndpoint.port}/old`, "old-fixture-key"],
+    [`http://127.0.0.1:${oldEndpoint.port}/new`, "path-fixture-key"],
+    [`http://127.0.0.1:${newEndpoint.port}/fresh`, "origin-fixture-key"],
+  ] as const) {
+    writeFileSync(envFile, `MEM0_OSS_API_KEY=${key}\n`, { mode: 0o600 });
+    initializeMem0OssEnv({ url, apiKeyEnvVar: "MEM0_OSS_API_KEY", envFile });
+    const apiKey = process.env.MEM0_OSS_PI_RESOLVED_API_KEY || process.env.MEM0_API_KEY || "";
+    await new Client({ apiKey }).getAll({ filters: { user_id: "reload-fixture-user" } });
+    const call = reloadCalls.at(-1);
+    assert(call);
+    const requestUrl = new URL(call.url);
+    assert.equal(requestUrl.origin + requestUrl.pathname, `${url}/memories`);
+    assert.equal(requestUrl.searchParams.get("user_id"), "reload-fixture-user");
+    assert.equal(call.key, key);
+  }
+  assert.equal(process.env.MEM0_OSS_BASE_URL, undefined);
+  assert.equal(process.env.MEM0_API_KEY, undefined);
+  delete process.env.MEM0_OSS_ENV_FILE;
+  initializeMem0OssEnv({ url: `http://127.0.0.1:${newEndpoint.port}/fresh`, apiKeyEnvVar: "MEM0_OSS_API_KEY", envFile: undefined });
+  assert.equal(process.env.MEM0_OSS_PI_RESOLVED_API_KEY, undefined, "Reload retained a previous file-backed key");
+} finally {
+  oldEndpoint.stop(true);
+  newEndpoint.stop(true);
+  rmSync(reloadRoot, { recursive: true, force: true });
+  for (const name of [...reloadVars, "MEM0_OSS_ENV_FILE"]) delete process.env[name];
 }
 
 type Mode = "ignored" | "capped" | "normal";
@@ -60,7 +104,8 @@ try {
   assert.deepEqual(rows.map((row) => row.id), ["foreign"]);
   assert.equal((await client.getAll({ filters })).count, 0);
   console.log(JSON.stringify({ verdict: "PASS", ignored_top_k: "zero mutations", silent_legacy_cap: "zero mutations",
-    complete_list: "only scoped IDs deleted", requests: calls.length + mutations.length }));
+    complete_list: "only scoped IDs deleted", same_process_reload: "path/origin/key refreshed", reload_requests: reloadCalls.length,
+    requests: calls.length + mutations.length }));
 } finally {
   fixture.stop(true);
 }

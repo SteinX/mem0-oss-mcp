@@ -79,7 +79,7 @@ export default class PiMemoryClient {
 
   constructor(options: { readonly apiKey: string }) {
     this.apiKey = options.apiKey;
-    this.baseUrl = validateRestBaseUrl(process.env.MEM0_OSS_BASE_URL || "");
+    this.baseUrl = validateRestBaseUrl(process.env.MEM0_OSS_BASE_URL || process.env.MEM0_OSS_PI_RESOLVED_BASE_URL || "");
     if (!this.baseUrl || !this.apiKey) throw new Mem0RestError("Mem0 OSS base URL and API key are required");
     this.listLimit = Number(process.env.MEM0_OSS_LIST_FETCH_LIMIT || "1000");
     this.legacyListCap = Number(process.env.MEM0_OSS_BACKEND_LIST_RETRY_LIMIT || "1000");

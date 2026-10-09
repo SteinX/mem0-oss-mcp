@@ -117,9 +117,16 @@ def patch_sources(plugin: Path, connection: Connection) -> None:
         content.replace(ENTRY_ANCHOR, init + ENTRY_ANCHOR, 1), encoding="utf-8"
     )
     config = plugin / "src/config/index.ts"
-    content = config.read_text(encoding="utf-8").replace(
-        'const AGENT_ROOT = path.join(os.homedir(), ".pi", "agent");',
-        'const AGENT_ROOT = process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent");',
+    content = (
+        config.read_text(encoding="utf-8")
+        .replace(
+            'const AGENT_ROOT = path.join(os.homedir(), ".pi", "agent");',
+            'const AGENT_ROOT = process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent");',
+        )
+        .replace(
+            "process.env.MEM0_API_KEY",
+            "(process.env.MEM0_OSS_PI_RESOLVED_API_KEY || process.env.MEM0_API_KEY)",
+        )
     )
     config.write_text(content, encoding="utf-8")
     mutations = (

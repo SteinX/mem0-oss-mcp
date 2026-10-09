@@ -111,12 +111,13 @@ if (fixture) {
   const fromFile = await createAgentSession({ cwd, agentDir, sessionManager: SessionManager.inMemory(cwd) });
   try {
     assert.equal(fromFile.extensionsResult.errors.length, 0);
-    assert.equal(process.env.MEM0_API_KEY, "fixture-'secret");
+    assert.equal(process.env.MEM0_OSS_PI_RESOLVED_API_KEY, "fixture-'secret");
+    assert.equal(process.env.MEM0_API_KEY, undefined);
     assert.equal(calls.length, 0);
   } finally {
     fromFile.session.dispose();
   }
-  process.env.MEM0_OSS_API_KEY = process.env.MEM0_API_KEY;
+  process.env.MEM0_OSS_API_KEY = process.env.MEM0_OSS_PI_RESOLVED_API_KEY;
   process.env.MEM0_OSS_BASE_URL = `http://127.0.0.1:${fixture.port}`;
 }
 
