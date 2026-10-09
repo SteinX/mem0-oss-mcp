@@ -18,6 +18,24 @@ project using its private operator credential; this read omits caller
 attribution because Sidecar's event endpoint requires an operator principal.
 Memory operations continue forwarding the original caller attribution.
 
+## Publishing the container image
+
+Publishing a GitHub Release automatically runs `Publish GHCR image` and builds
+its exact tagged commit. `ghcr.io/steinx/mem0-oss-mcp` receives the Release tag
+and full commit SHA as image tags. Stable releases also update `latest`;
+prereleases do not. Draft releases and Git tag pushes alone do not publish.
+
+For release tags containing this workflow update, retry publication without
+recreating the Release by manually dispatching the workflow from that tag:
+
+```sh
+gh workflow run publish-ghcr.yml --repo SteinX/mem0-oss-mcp --ref 0.1.6
+```
+
+A manual run from a tag preserves `latest` unless `push_latest=true` is supplied.
+Manual runs from `main` retain their existing behavior: publish the commit SHA
+and update `latest`. The publisher verifies its source before logging into GHCR.
+
 ## Configuration
 
 ```env
