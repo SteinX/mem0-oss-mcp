@@ -89,8 +89,35 @@ def test_manual_verifier_binds_to_dispatch_sha(
     assert (path / "outputs.txt").read_text().strip() == f"sha={later}"
 
 
+@pytest.mark.parametrize("fetch_tag", [False, True])
+def test_manual_tag_retry_requires_a_fresh_tag_checkout(
+    source_repo: tuple[Path, str, str], tmp_path: Path, fetch_tag: bool
+) -> None:
+    source, released, _ = source_repo
+    checkout = tmp_path / "fresh-checkout"
+    checkout.mkdir()
+    git(checkout, "init", "-q")
+    git(checkout, "remote", "add", "origin", source.as_uri())
+    if fetch_tag:
+        git(
+            checkout,
+            "fetch",
+            "--no-tags",
+            "--depth=1",
+            "origin",
+            f"+refs/heads/{TAG}*:refs/remotes/origin/{TAG}*",
+            f"+refs/tags/{TAG}*:refs/tags/{TAG}*",
+        )
+        git(checkout, "checkout", "-q", TAG)
+    else:
+        git(checkout, "fetch", "--no-tags", "--depth=1", "origin", released)
+        git(checkout, "checkout", "-q", "FETCH_HEAD")
+    assert git(checkout, "rev-parse", "HEAD") == released
+    assert (verify_source(checkout, released, TAG).returncode == 0) is fetch_tag
+
+
 def test_workflow_verifies_source_before_publish_credentials() -> None:
     workflow = WORKFLOW.read_text()
-    assert "ref: ${{ github.event.release.tag_name || github.sha }}" in workflow
+    assert "ref: ${{ env.RELEASE_TAG || github.sha }}" in workflow
     assert "persist-credentials: false" in workflow
     assert workflow.index("id: source") < workflow.index("- name: Log in to GHCR")

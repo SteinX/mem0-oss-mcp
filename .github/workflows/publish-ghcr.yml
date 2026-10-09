@@ -2,6 +2,12 @@ name: Publish GHCR image
 
 on:
   workflow_dispatch:
+    inputs:
+      push_latest:
+        description: Also update latest when manually publishing a tag (main already updates latest).
+        required: false
+        default: false
+        type: boolean
   release:
     types: [published]
 
@@ -12,6 +18,8 @@ permissions:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+  RELEASE_TAG: ${{ github.event.release.tag_name || (github.ref_type == 'tag' && github.ref_name) || '' }}
+  PUSH_LATEST: ${{ (github.event_name == 'release' && !github.event.release.prerelease) || (github.event_name == 'workflow_dispatch' && (github.ref == 'refs/heads/main' || inputs.push_latest)) }}
 
 jobs:
   publish:
@@ -21,13 +29,11 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.release.tag_name || github.sha }}
+          ref: ${{ env.RELEASE_TAG || github.sha }}
           persist-credentials: false
 
       - name: Verify publication source
         id: source
-        env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           set -euo pipefail
           source_sha=$(git rev-parse HEAD)
@@ -42,7 +48,6 @@ jobs:
 
       - name: Build and push image
         env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
           SOURCE_SHA: ${{ steps.source.outputs.sha }}
         run: |
           image="$REGISTRY/${IMAGE_NAME,,}"
@@ -57,7 +62,9 @@ jobs:
           if [ -n "$RELEASE_TAG" ]; then
             docker tag "$sha_tag" "$image:$RELEASE_TAG"
             docker push "$image:$RELEASE_TAG"
-          elif [ "$GITHUB_REF" = "refs/heads/main" ]; then
+          fi
+
+          if [ "$PUSH_LATEST" = "true" ]; then
             docker tag "$sha_tag" "$image:latest"
             docker push "$image:latest"
           fi
