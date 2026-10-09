@@ -27,6 +27,7 @@ from .auth import (
 from .caller_context import (
     CALLER_CONTEXT_HEADER,
     bind_http_principal,
+    current_http_principal,
     encode_current_caller_context,
 )
 
@@ -142,6 +143,21 @@ class Config:
 EVENTS: dict[str, JSON] = {}
 _LIST_LIMIT_SUPPORT: dict[tuple[str, object], bool] = {}
 _sidecar_healthy = threading.Event()
+
+
+def _can_read_event(event: JSON) -> bool:
+    principal = current_http_principal()
+    if principal is None:
+        return True  # Trusted in-process calls have no remote principal.
+    match event.get("channel"):  # noqa: MATCH_OK -- stored JSON is an open boundary.
+        case {"transport": "mcp", "credential_kind": kind, "credential_id": credential_id}:
+            return (
+                kind == principal.credential_kind
+                and credential_id == principal.credential_id
+                and (kind != "core_api_key" or credential_id is not None)
+            )
+        case _:
+            return False
 
 
 def _json_default(value: Any) -> str:
@@ -568,6 +584,13 @@ def add_memory(args: JSON) -> JSON:
     else:
         result = _backend("POST", "/memories", body)
     sidecar_event = result.get("event", {}) if _uses_sidecar() and isinstance(result, dict) else {}
+    principal = current_http_principal()
+    channel = sidecar_event.get("channel") if _uses_sidecar() else (
+        {"transport": "mcp", "credential_kind": principal.credential_kind,
+         "credential_id": principal.credential_id} if principal else None
+    )
+    if not _can_read_event({"channel": channel}):
+        raise BackendError(404, "event not found")
     event_id = str(sidecar_event.get("id") or uuid.uuid4())
     memory_result = result.get("memory", result) if isinstance(result, dict) else {}
     results = memory_result.get("results", []) if isinstance(memory_result, dict) else []
@@ -579,6 +602,7 @@ def add_memory(args: JSON) -> JSON:
         "result_count": len(results),
         "memory_id": _extract_memory_id(result),
         "created_at": time.time(),
+        "channel": channel,
     }
     EVENTS[event_id] = event
     return {"event_id": event_id, "status": "SUCCEEDED"}
@@ -980,7 +1004,10 @@ def delete_entities(args: JSON) -> Any:
 
 
 def list_events(args: JSON) -> JSON:
-    events = sorted(EVENTS.values(), key=lambda e: e["created_at"], reverse=True)
+    events = sorted(
+        (event for event in EVENTS.values() if _can_read_event(event)),
+        key=lambda event: event["created_at"], reverse=True,
+    )
     return _paged(events, args)
 
 
@@ -995,6 +1022,8 @@ def get_event_status(args: JSON) -> JSON:
                 f"/v1/event/{quote(str(event_id), safe='')}",
                 query={"project_id": Config.sidecar_project_id, "project_wide": True},
             )
+            if not _can_read_event(event):
+                raise BackendError(404, "event not found")
             return {
                 "event_id": event_id,
                 "status": event["status"],
@@ -1003,7 +1032,10 @@ def get_event_status(args: JSON) -> JSON:
                 "result_count": event.get("result_count", 0),
             }
         raise ValueError(f"event not found: {event_id}")
-    return EVENTS[event_id]
+    event = EVENTS[event_id]
+    if not _can_read_event(event):
+        raise BackendError(404, "event not found")
+    return event
 
 
 TOOLS = {

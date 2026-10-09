@@ -42,8 +42,12 @@ def bind_http_principal(principal: AuthPrincipal) -> Iterator[None]:
         _CURRENT_PRINCIPAL.reset(token)
 
 
+def current_http_principal() -> AuthPrincipal | None:
+    return _CURRENT_PRINCIPAL.get()
+
+
 def encode_current_caller_context() -> str | None:
-    principal = _CURRENT_PRINCIPAL.get()
+    principal = current_http_principal()
     if principal is None:
         return None
 
