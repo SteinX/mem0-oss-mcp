@@ -83,3 +83,14 @@ def test_legacy_sidecar_response_is_not_mistaken_for_complete_cursor_listing():
         pytest.raises(ValueError, match="0.3.13"),
     ):
         server.get_memories({"mode": "cursor"})
+
+
+@pytest.mark.parametrize("value", ["false", "true", 0, 1, [], {}, None])
+def test_malformed_include_expired_is_rejected_before_backend(value):
+    with (
+        patch.object(server.Config, "sidecar_base_url", "http://fixture.invalid"),
+        patch.object(server, "_sidecar_backend") as downstream,
+    ):
+        with pytest.raises(ValueError, match="boolean"):
+            server.get_memories({"mode": "count", "include_expired": value})
+        downstream.assert_not_called()

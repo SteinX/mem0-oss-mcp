@@ -672,7 +672,9 @@ def search_memories(args: JSON) -> Any:
 
 
 def get_memories(args: JSON) -> JSON:
-    include_expired = bool(args.get("include_expired"))
+    include_expired = args.get("include_expired", False)
+    if not isinstance(include_expired, bool):
+        raise ValueError("get_memories include_expired must be a boolean")
     filters = args.get("filters") or {}
     values = _filter_values(filters)
     for key in ("user_id", "agent_id", "run_id", "app_id"):
