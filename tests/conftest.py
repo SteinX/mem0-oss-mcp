@@ -44,6 +44,8 @@ def pi_upstream(tmp_path: Path) -> Path:
     (plugin / "src/config").mkdir(parents=True)
     (plugin / "skills/search").mkdir(parents=True)
     (plugin / "skills/search/SKILL.md").write_text("---\nname: search\n---\n")
+    (plugin / "skills/tour").mkdir()
+    (plugin / "skills/status").mkdir()
     (plugin / "package.json").write_text(
         json.dumps(
             {
@@ -80,6 +82,13 @@ export function loadConfig() { return {apiKey: process.env.MEM0_API_KEY,
     const scope = resolveToolScope(params.scope, defaultScope);
         const filters = resolveSearchFilters(scope, scopeCtx);
 mem0.add(messages, { ...addParams, customCategories: DEFAULT_CUSTOM_CATEGORIES });
+      case "get_all": {
+        const result = await mem0.getAll({ filters });
+        const memories = result.results ?? [];
+        truncateOutput(formatMemoryList(memories));
+        details: { totalCount: result.count ?? memories.length },
+      }
+      case "update": {
 mem0.update(memoryId, { text: params.content });
 mem0.delete(normalizeMemoryId(params.memory_id));
 mem0.deleteAll(delParams);
@@ -92,7 +101,19 @@ Use mem0_memory with action "add" to save important facts, preferences, goals, d
     )
     (plugin / "src/capture").mkdir()
     (plugin / "src/capture/index.ts").write_text("        ...addParams,")
-    (plugin / "src/commands.ts").write_text("mem0.delete(target.id);\n")
+    (plugin / "src/commands.ts").write_text("""mem0.delete(target.id);
+  pi.registerCommand("mem0-tour", {
+      const result = await mem0.getAll({ filters });
+      sendFeedback("mem0-tour", lines.join("\\n"));
+  });
+  pi.registerCommand("mem0-scope", {});
+  pi.registerCommand("mem0-status", {
+      let count = 0;
+      const result = await mem0.getAll({ filters });
+      count = result.count ?? (result.results ?? []).length;
+      `Project memories: ${count}`;
+  });
+""")
     core = root / "integrations/agent-plugin-core/typescript/src"
     core.mkdir(parents=True)
     (core / "lifecycle.ts").write_text("export const shared = true;\n")

@@ -304,9 +304,9 @@ submodule and rerun `install_opencode_plugin.py`.
 
 Generate the official Pi 0.3.2+ extension with a self-hosted MCP adapter. Pi uses
 Bearer authentication against the bridge's `/mcp` endpoint. Use a bridge configured
-with Sidecar 0.3.12 or later for pagination, write idempotency and caller-bound
-event receipts. Earlier sidecars can persist an authenticated add and then fail
-the bridge's event ownership check because the receipt lacks its channel.
+with Sidecar 0.3.13 or later and bridge 0.1.6 or later for cursor traversal,
+write idempotency and caller-bound event receipts. Upgrade Sidecar first, then
+the bridge, then regenerate the Pi extension and restart or reload the session.
 The Core REST adapter shipped in the initial Pi implementation is replaced;
 regenerate it using your MCP URL and MCP token.
 
@@ -361,15 +361,28 @@ system prefix during prewarm without fetching memories or consuming recall state
 upstream Pi ignores the optional registration flag. Both runtimes are exercised
 in CI. This does not establish a particular provider's cache hit rate or cost.
 
-Listing follows MCP `has_more` pages rather than Core `top_k` windows, and returns
-the number of visible memories. ID mutations first read that ID and verify its
-scope. Unfiltered bulk deletion uses the bridge's scoped endpoint; narrowed
-bulk deletion enumerates selected IDs before deleting. Add returns the durable
-event ID. Cloud-only custom categories and rerank/source body options are ignored.
+`get_all` returns one cursor page (20 rows by default, `page_size` up to 100),
+with `nextCursor` for explicit continuation. The client `iterateAllPages` method
+supports complete traversal beyond 5000 records without hydrating earlier pages
+again. `/mem0-status` counts the active Sidecar index without fetching Core rows;
+this index count may exceed currently readable rows if stale records remain.
+`/mem0-tour` shows a bounded preview in the interactive UI; headless mode returns
+only a short summary. Memory bodies from tour do not enter model context.
+Older servers fail promptly with upgrade guidance rather than falling back to
+numeric pagination. The existing numeric MCP/dashboard listing remains unchanged.
+
+ID mutations first read that ID and verify its scope. Unfiltered bulk deletion
+uses the bridge's scoped endpoint; narrowed bulk deletion reads and deletes one
+cursor page at a time. Cancellation or failure reports confirmed deletions and
+does not retry writes. Add returns the durable event ID. Cloud-only custom
+categories and rerank/source body options are ignored.
 
 Run source/build/runtime verification with `tests/run_pi_qa.sh` (Node 24, pnpm,
 Bun and the pinned submodule). Production data and daily extension settings are
 not touched by these fixtures.
+Set `PI_QA_SIDECAR_SOURCE` to a Sidecar 0.3.13+ checkout to also run the real
+authenticated HTTP/SQLite chain against 8568 fixture memories. CI pins that
+checkout and runs the chain as well as the SDK fixtures.
 
 ## Run
 

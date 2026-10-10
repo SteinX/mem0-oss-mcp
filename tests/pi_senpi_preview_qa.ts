@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createAgentSession, SessionManager } from "@code-yeongyu/senpi";
-import { fixture } from "./pi_mcp_fixture.ts";
+import { fixture, record } from "./pi_mcp_fixture.ts";
 
 const root = process.env.PI_QA_ROOT, plugin = process.env.PI_QA_PLUGIN;
 assert(root && plugin);
@@ -35,6 +35,21 @@ try {
   assert.deepEqual(backend.calls[0]?.args["filters"], { user_id: "senpi-fixture-user", app_id: "explicit-project" });
   // Given the alternate runtime, when a native command runs, then the bridge is reachable.
   await session.prompt("/mem0-status");
+  assert.equal(backend.calls.at(-1)?.args["mode"], "count");
+  const notifications: string[] = [];
+  const ctx = runner.createToolContext("qa", undefined);
+  runner.setUIContext({ ...ctx.ui, notify: message => notifications.push(message) }, "interactive");
+  for (let index = 0; index < 120; index += 1) backend.rows.push({ id: `tour-${String(index).padStart(3, "0")}`,
+    memory: `huge-senpi-memory ${"x".repeat(10000)}`, user_id: "senpi-fixture-user", metadata: { app_id: "explicit-project" } });
+  const tourBefore = backend.calls.length;
+  await session.prompt("/mem0-tour");
+  assert.equal(backend.calls.length, tourBefore + 1);
+  assert.equal(backend.calls.at(-1)?.args["page_size"], 50);
+  const notice = notifications.at(-1); assert(notice && notice.length <= 4000);
+  assert(!session.state.messages.some(message => message.role === "custom" && message.customType === "mem0-tour"));
+  const tool = runner.getToolDefinition("mem0_memory"); assert(tool);
+  const listed = await tool.execute("qa", { action: "get_all", page_size: 20 }, undefined, undefined, ctx);
+  assert(record(listed.details) && listed.details["hasMore"] === true && listed.details["returnedCount"] === 20);
   console.log(JSON.stringify({ runtime: "Senpi 2026.10.10-9", preview_safe: "passed", preview_requests: 0,
     preview_prefix: "matches real turn", hidden_recall: "passed", explicit_identity: "passed", omo_config: "passed" }));
 } finally { session.dispose(); backend.server.stop(true); }

@@ -32,6 +32,8 @@ try {
   const status = session.state.messages.find(message => message.role === "custom" && message.customType === "mem0-status");
   assert(status && JSON.stringify(status).includes(app));
   assert.equal(backend.calls[0]?.args["filters"] && JSON.stringify(backend.calls[0].args["filters"]), JSON.stringify({ user_id: user, app_id: app }));
+  assert.equal(backend.calls[0]?.args["mode"], "count");
+  assert(JSON.stringify(status).includes("Active indexed project memories"));
   // Given changing recall, when two prompts run, then only hidden context changes.
   const first = await runner.emitBeforeAgentStart("first question", undefined, { cwd });
   const second = await runner.emitBeforeAgentStart("second question", undefined, { cwd });
@@ -57,6 +59,25 @@ try {
   await tool.execute("qa", { action: "update", memory_id: "own", content: "changed", metadata: { type: "lesson" } }, undefined, undefined, ctx);
   await tool.execute("qa", { action: "delete", memory_id: "own" }, undefined, undefined, ctx);
   await assert.rejects(tool.execute("qa", { action: "get_all", scope: "global" }, undefined, undefined, ctx), /global/i);
+  // Given a large corpus, when touring interactively, then only one bounded UI preview is shown.
+  const notifications: string[] = [];
+  runner.setUIContext({ ...ctx.ui, notify: message => notifications.push(message) }, "interactive");
+  for (let index = 0; index < 120; index += 1) backend.rows.push({ id: `tour-${String(index).padStart(3, "0")}`,
+    memory: `huge-tour-memory-${index} ${"x".repeat(10000)}`, user_id: user, metadata: { app_id: app, type: "tour-fixture" } });
+  const tourBefore = backend.calls.length;
+  await session.prompt("/mem0-tour");
+  assert.equal(backend.calls.length, tourBefore + 1);
+  assert.equal(backend.calls.at(-1)?.args["page_size"], 50);
+  const notice = notifications.at(-1); assert(notice && notice.length <= 4000);
+  assert(!session.state.messages.some(message => message.role === "custom" && message.customType === "mem0-tour"));
+  // Given paged tool output, when continuing explicitly, then no full corpus enters a tool response.
+  const firstPage = await tool.execute("qa", { action: "get_all", filters: { type: "tour-fixture" }, page_size: 20 }, undefined, undefined, ctx);
+  assert(record(firstPage.details) && firstPage.details["hasMore"] === true && firstPage.details["returnedCount"] === 20);
+  const cursor = firstPage.details["nextCursor"]; assert(typeof cursor === "string");
+  assert(JSON.stringify(firstPage.content).length < 12000);
+  const nextPage = await tool.execute("qa", { action: "get_all", filters: { type: "tour-fixture" }, page_size: 20, cursor }, undefined, undefined, ctx);
+  assert(record(nextPage.details) && nextPage.details["returnedCount"] === 20);
+  assert.notDeepEqual(firstPage.content, nextPage.content);
   // Given explicit capture opt-in, when a turn ends, then only redacted typed capture is written.
   writeFileSync(join(agentDir, "mem0-config.json"), JSON.stringify({ userId: user, autoCapture: true }));
   const optedIn = await createAgentSession({ cwd, agentDir, sessionManager: SessionManager.inMemory(cwd) });

@@ -9,6 +9,8 @@ const rows = Array.from({ length: 8568 }, (_, index) => ({
 const calls: { name: string; args: Record<string, unknown> }[] = [];
 let repeatPage = false;
 let reject = false;
+let legacy = false;
+let toolError: string | undefined;
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -23,14 +25,29 @@ const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) 
   assert(typeof params["name"] === "string" && record(params["arguments"]));
   const name = params["name"], args = params["arguments"];
   calls.push({ name, args });
+  if (name === "get_memories" && toolError) {
+    return Response.json({ jsonrpc: "2.0", id: rpc["id"], result: {
+      isError: true, content: [{ type: "text", text: toolError }],
+    } });
+  }
   let result: unknown;
   switch (name) {
     case "get_memories": {
-      const page = repeatPage ? 1 : Number(args["page"]);
-      assert.equal(args["page_size"], 100);
       assert.deepEqual(args["filters"], scope);
-      result = { results: rows.slice((page - 1) * 100, page * 100), total: rows.length,
-        page, page_size: 100, has_more: page * 100 < rows.length };
+      if (!args["mode"]) {
+        const page = Number(args["page"]), size = Number(args["page_size"]);
+        if (page * size > 5000) return new Response("page window must not exceed 5000 records", { status: 422 });
+        result = { results: rows.slice((page - 1) * size, page * size), total: rows.length, page, has_more: page * size < rows.length };
+      } else if (legacy) {
+        result = { results: [], total: 0, has_more: false };
+      } else if (args["mode"] === "count") {
+        result = { protocol: "cursor-v1", results: [], total: rows.length, count_basis: "sidecar_projection", next_cursor: null, has_more: false };
+      } else {
+        const offset = repeatPage ? 0 : Number(args["cursor"] ?? 0), size = Number(args["page_size"]);
+        const next = offset + size < rows.length ? String(offset + size) : null;
+        result = { protocol: "cursor-v1", results: rows.slice(offset, offset + size), total: rows.length,
+          count_basis: "sidecar_projection", next_cursor: next, has_more: next !== null };
+      }
       break;
     }
     case "get_memory":
@@ -49,11 +66,23 @@ process.env.MEM0_OSS_MCP_URL = `http://127.0.0.1:${server.port}/mcp`;
 process.env.MEM0_OSS_BASE_URL = `http://127.0.0.1:${server.port}`;
 const client = new PiMemoryClient({ apiKey: "fixture-token" });
 try {
-  // Given a scope larger than Core's maximum list window, when listed, then all pages are visible.
+  // Given a real 5000-record numeric window, when listed normally, then return only one bounded page.
   const list = await client.getAll({ filters: scope });
-  assert.equal(list.count, 8568);
-  assert.equal(list.results.at(-1)?.id, "own-8567");
-  assert.equal(calls.filter(call => call.name === "get_memories").length, 86);
+  assert.equal(list.count, 20);
+  assert.equal(list.total, 8568);
+  assert.equal(list.results.length, 20);
+  assert.equal(list.nextCursor, "20");
+  assert.equal(calls.filter(call => call.name === "get_memories").length, 1);
+  // Given an explicit complete traversal, when iterated, then all rows pass through cursor pages.
+  const all = [];
+  for await (const page of client.iterateAllPages({ filters: scope })) all.push(...page.results);
+  assert.equal(all.length, 8568);
+  assert.equal(all.at(-1)?.id, "own-8567");
+  assert(calls.filter(call => call.name === "get_memories").every(call => call.args["mode"] === "cursor"));
+  // Given count-only status, when queried, then no row data is requested or returned.
+  const count = await client.countAll({ filters: scope });
+  assert.equal(count.total, 8568);
+  assert.equal(calls.at(-1)?.args["mode"], "count");
   // Given an existing ID, when changed, then validation uses a scoped ID read without listing.
   calls.length = 0;
   await client.update("own-8567", { text: "updated", filters: scope });
@@ -75,6 +104,29 @@ try {
   reject = false;
   // Given a server repeating pages, when listing, then partial data is never reported as complete.
   repeatPage = true;
-  await assert.rejects(client.getAll({ filters: scope }), /pagination/);
-  console.log(JSON.stringify({ transport: "MCP", rows: list.count, pages: 86, scoped_ids: "passed", receipts: "passed", failures: "passed" }));
+  await assert.rejects(async () => {
+    for await (const page of client.iterateAllPages({ filters: scope })) assert(page.results.length > 0);
+  }, /pagination/);
+  repeatPage = false;
+  // Given a legacy bridge ignoring cursor options, when read, then fail after one request with upgrade guidance.
+  legacy = true;
+  calls.length = 0;
+  await assert.rejects(client.getAll({ filters: scope }), /0\.1\.6.*0\.3\.13/);
+  assert.equal(calls.length, 1);
+  legacy = false;
+  toolError = "Cursor listing requires Sidecar 0.3.13+";
+  calls.length = 0;
+  await assert.rejects(client.getAll({ filters: scope }), /0\.1\.6.*0\.3\.13/);
+  await assert.rejects(client.deleteAll({ userId: scope.user_id, appId: scope.app_id,
+    filters: { type: "decision" } }), error => error instanceof Error
+    && /0 deletions confirmed/.test(error.message) && /0\.1\.6.*0\.3\.13/.test(error.message));
+  assert(calls.every(call => call.name === "get_memories"));
+  toolError = "private backend detail fixture-token";
+  await assert.rejects(client.getAll({ filters: scope }), { message: "Mem0 OSS MCP tool get_memories failed" });
+  toolError = undefined;
+  const cancelled = new AbortController(); cancelled.abort();
+  calls.length = 0;
+  await assert.rejects(client.getAll({ filters: scope, signal: cancelled.signal }), /abort|cancel/i);
+  assert.equal(calls.length, 0);
+  console.log(JSON.stringify({ transport: "MCP", rows: all.length, bounded_page: list.results.length, scoped_ids: "passed", receipts: "passed", failures: "passed" }));
 } finally { server.stop(true); }

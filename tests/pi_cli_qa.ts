@@ -24,6 +24,7 @@ for (const runtime of ["@earendil-works/pi-coding-agent", "@code-yeongyu/senpi"]
     assert.equal(exitCode, 0, stderr);
     assert(stdout.includes("Connection: connected"), stdout);
     assert.equal(backend.calls[0]?.name, "get_memories");
+    assert.equal(backend.calls[0]?.args["mode"], "count");
     assert.deepEqual(backend.calls[0]?.args["filters"], { user_id: "cli-user", app_id: "cli-project" });
     console.log(JSON.stringify({ runtime, cli: "/mem0-status", connection: "connected", requests: backend.calls.length }));
   } finally { backend.server.stop(true); }

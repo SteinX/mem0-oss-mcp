@@ -111,7 +111,8 @@ these generated defaults.
 ## Pi
 
 `scripts/install_pi_plugin.py` generates the official Pi 0.3.2+ extension with an
-MCP adapter. It uses the same bridge and durable Sidecar 0.3.12+ path as other clients.
+MCP adapter. Cursor listing requires bridge 0.1.6+ and Sidecar 0.3.13+.
+Upgrade Sidecar, then the bridge, then regenerate/reload the extension.
 
 ```bash
 printf '%s\n' "$MEM0_OSS_MCP_TOKEN" | \
@@ -124,7 +125,10 @@ Use `--pi-dir ~/.omo/agent` for omo native; the directory is also embedded as th
 runtime config default. Explicit agent-dir environment variables take precedence.
 Automatic capture is off by default, project identity follows Git origin, and
 recall is hidden message context with a fixed system policy and Senpi preview-safe
-registration. Lists use sidecar pagination; ID mutations verify scope via ID reads.
+registration. Lists return one bounded cursor page with explicit continuation;
+status counts the Sidecar index without fetching memory bodies. Tour previews stay
+in the UI, and filtered deletion processes one page at a time. ID mutations verify
+scope via ID reads.
 Tokens remain in a private file outside the package and are bound to its origin.
 Regenerate older Core REST copies with an MCP URL/token. See the repository README
 for dependency installation, overrides, migration and runtime checks.
