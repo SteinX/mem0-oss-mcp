@@ -60,3 +60,24 @@ jobs:
           version=$(PYTHONPATH=src python -c 'from mem0_oss_mcp import __version__; print(__version__)')
           bash plugins/mem0-oss/scripts/build_pi_release.sh "$version" "$RUNNER_TEMP/pi-assets"
           bash tests/run_pi_release_qa.sh "$RUNNER_TEMP/pi-assets" "$version"
+
+  client-runtime:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.2.14"
+      - name: Build and exercise native Codex and OpenCode release packages
+        run: |
+          version=$(PYTHONPATH=src python -c 'from mem0_oss_mcp import __version__; print(__version__)')
+          python3 plugins/mem0-oss/scripts/build_client_releases.py "$version" "$RUNNER_TEMP/client-assets"
+          bash tests/run_client_release_qa.sh "$RUNNER_TEMP/client-assets" "$version"

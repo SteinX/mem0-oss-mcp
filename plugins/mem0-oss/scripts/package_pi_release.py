@@ -7,17 +7,13 @@
 
 from __future__ import annotations
 
-import gzip
-import hashlib
-import io
 import json
 import re
 import sys
-import tarfile
-import zipfile
 from pathlib import Path
 
 from pi_plugin_layout import InstallerError
+from release_archives import write_archives
 
 
 def package_release(
@@ -74,37 +70,7 @@ def package_release(
         )
         + "\n"
     ).encode()
-    output.mkdir(parents=True, exist_ok=True)
-    stem = f"mem0-oss-pi-{version}"
-    archive_zip = output / f"{stem}.zip"
-    archive_tar = output / f"{stem}.tar.gz"
-    with zipfile.ZipFile(archive_zip, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for name, data in sorted(public.items()):
-            member = zipfile.ZipInfo(
-                "mem0-oss/" + name, date_time=(1980, 1, 1, 0, 0, 0)
-            )
-            member.external_attr = 0o100644 << 16
-            archive.writestr(member, data, compress_type=zipfile.ZIP_DEFLATED)
-    with (
-        archive_tar.open("wb") as stream,
-        gzip.GzipFile(filename="", fileobj=stream, mode="wb", mtime=0) as compressed,
-        tarfile.open(fileobj=compressed, mode="w") as archive,
-    ):
-        for name, data in sorted(public.items()):
-            member = tarfile.TarInfo("mem0-oss/" + name)
-            member.size = len(data)
-            member.mode = 0o644
-            archive.addfile(member, io.BytesIO(data))
-    archives = [archive_zip, archive_tar]
-    checksum = output / f"{stem}.sha256"
-    checksum.write_text(
-        "".join(
-            f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}\n"
-            for path in archives
-        ),
-        encoding="utf-8",
-    )
-    return [*archives, checksum]
+    return write_archives(public, output, f"mem0-oss-pi-{version}")
 
 
 if __name__ == "__main__":

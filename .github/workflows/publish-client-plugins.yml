@@ -1,4 +1,4 @@
-name: Publish Pi plugin archives
+name: Publish client plugin archives
 
 on:
   release:
@@ -19,11 +19,10 @@ jobs:
     permissions:
       contents: write
     concurrency:
-      group: pi-release-${{ github.event.release.tag_name || inputs.release_tag }}
+      group: client-release-${{ github.event.release.tag_name || inputs.release_tag }}
       cancel-in-progress: false
     env:
       RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -42,16 +41,20 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.2.14"
-      - name: Verify release and build archives
+      - name: Verify release and build all client archives
         run: |
           set -euo pipefail
           [[ "$RELEASE_TAG" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
-          bash plugins/mem0-oss/scripts/build_pi_release.sh "${RELEASE_TAG#v}" "$RUNNER_TEMP/pi-assets"
-      - name: Install extracted package in Pi and Senpi
+          GH_TOKEN="${{ secrets.GITHUB_TOKEN }}" gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
+          bash plugins/mem0-oss/scripts/build_pi_release.sh "${RELEASE_TAG#v}" "$RUNNER_TEMP/client-assets"
+          python3 plugins/mem0-oss/scripts/build_client_releases.py "${RELEASE_TAG#v}" "$RUNNER_TEMP/client-assets"
+      - name: Install extracted packages in all native clients
         run: |
-          bash tests/run_pi_release_qa.sh "$RUNNER_TEMP/pi-assets" "${RELEASE_TAG#v}"
+          bash tests/run_pi_release_qa.sh "$RUNNER_TEMP/client-assets" "${RELEASE_TAG#v}"
+          bash tests/run_client_release_qa.sh "$RUNNER_TEMP/client-assets" "${RELEASE_TAG#v}"
       - name: Upload tested release attachments
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload "$RELEASE_TAG" "$RUNNER_TEMP/pi-assets/"* \
+          gh release upload "$RELEASE_TAG" "$RUNNER_TEMP/client-assets/"* \
             --repo "$GITHUB_REPOSITORY" --clobber
