@@ -15,9 +15,11 @@ python3 "$repo/plugins/mem0-oss/scripts/install_pi_plugin.py" --url https://fixt
 ln -s "$qa_root/runtime/node_modules" "$PI_QA_PLUGIN/node_modules"
 "$qa_root/runtime/node_modules/.bin/tsc" --noEmit -p "$PI_QA_PLUGIN/tsconfig.json"
 bun "$repo/tests/pi_mcp_client_qa.ts"
+bun "$repo/tests/pi_delete_qa.ts"
 bun "$repo/tests/pi_connection_qa.ts"
 bun "$repo/tests/pi_runtime_qa.ts"
 bun "$repo/tests/pi_senpi_preview_qa.ts"
+if [ -n "${PI_QA_SIDECAR_SOURCE:-}" ]; then python3 "$repo/tests/pi_chain_qa.py"; fi
 (cd "$PI_QA_PLUGIN" && "$qa_root/runtime/node_modules/.bin/tsup")
 python3 - "$PI_QA_PLUGIN/package.json" <<'PY'
 import json

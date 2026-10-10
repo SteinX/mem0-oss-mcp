@@ -5,7 +5,7 @@ export type Row = { readonly id: string; readonly memory: string; readonly user_
 export function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-export function fixture(user: string, app: string) {
+export function fixture(user: string, app: string, onCall?: (name: string, args: Record<string, unknown>) => void) {
   const rows: Row[] = [
     { id: "own", memory: "fixture decision", user_id: user, metadata: { app_id: app, type: "decision" } },
     { id: "foreign-app", memory: "other project", user_id: user, metadata: { app_id: "another-app" } },
@@ -20,13 +20,30 @@ export function fixture(user: string, app: string) {
     const { name, arguments: args } = rpc["params"];
     assert(typeof name === "string" && record(args));
     calls.push({ name, args });
+    onCall?.(name, args);
     const filters = record(args["filters"]) ? args["filters"] : args;
-    const selected = rows.filter(row => Object.entries(filters).every(([key, value]) =>
+    const selected = ["get_memories", "search_memories", "delete_all_memories"].includes(name) ? rows.filter(row => Object.entries(filters).every(([key, value]) =>
       !["user_id", "app_id", "run_id", "type"].includes(key)
-      || (key === "user_id" ? row.user_id : key === "run_id" ? row.run_id : row.metadata[key]) === value));
+      || (key === "user_id" ? row.user_id : key === "run_id" ? row.run_id : row.metadata[key]) === value)) : [];
     let result: unknown;
     switch (name) {
-      case "get_memories": result = { results: selected, total: selected.length, page: args["page"], has_more: false }; break;
+      case "get_memories": {
+        if (args["mode"] === "count") {
+          result = { protocol: "cursor-v1", results: [], total: selected.length, count_basis: "sidecar_projection", next_cursor: null, has_more: false };
+          break;
+        }
+        const ordered = [...selected].sort((left, right) => left.id.localeCompare(right.id));
+        const incoming: unknown = args["cursor"] ? JSON.parse(String(args["cursor"])) : undefined;
+        const after = record(incoming) && typeof incoming["after"] === "string" ? incoming["after"] : "";
+        const upper = record(incoming) && typeof incoming["upper"] === "string" ? incoming["upper"] : ordered.at(-1)?.id ?? "";
+        const total = record(incoming) ? Number(incoming["total"]) : selected.length;
+        const candidates = ordered.filter(row => row.id > after && row.id <= upper);
+        const page = candidates.slice(0, Number(args["page_size"] ?? 20));
+        const last = page.at(-1);
+        const next = last && candidates.length > page.length ? JSON.stringify({ after: last.id, upper, total }) : null;
+        result = { protocol: "cursor-v1", results: page, total, count_basis: "sidecar_projection", next_cursor: next, has_more: next !== null };
+        break;
+      }
       case "search_memories": result = { results: selected.map(row => ({ ...row, memory: `${row.memory}: ${args["query"]}` })) }; break;
       case "get_memory": result = rows.find(row => row.id === args["id"]); break;
       case "add_memory": {

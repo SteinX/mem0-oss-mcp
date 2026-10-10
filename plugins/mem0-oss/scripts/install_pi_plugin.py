@@ -164,6 +164,7 @@ def main() -> int:
             "mem0_oss_pi_client.ts",
             "mem0_oss_pi_transport.ts",
             "mem0_oss_pi_recall.ts",
+            "mem0_oss_pi_listing.ts",
         ):
             copy_adapter_file(adapter / filename, staging / filename)
         patch_sources(staging, connection)

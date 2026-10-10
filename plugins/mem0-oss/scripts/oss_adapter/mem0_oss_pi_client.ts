@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { Mem0McpError, PiMcpTransport, memorySchema, pageSchema, receiptSchema } from "./mem0_oss_pi_transport.ts";
+import { Mem0McpError, PiMcpTransport, memorySchema, pageSchema, receiptSchema, listingSchema } from "./mem0_oss_pi_transport.ts";
 export { initializeMem0OssEnv } from "./mem0_oss_pi_env.ts";
 
 export interface SearchMemoryOptions {
@@ -18,6 +18,13 @@ interface EntityOptions {
   readonly metadata?: Record<string, unknown>;
   readonly source?: string;
   readonly customCategories?: readonly Record<string, string>[];
+}
+export interface ListOptions {
+  readonly filters?: Record<string, string>;
+  readonly includeExpired?: boolean;
+  readonly pageSize?: number;
+  readonly cursor?: string;
+  readonly signal?: AbortSignal;
 }
 function entityFilters(options: EntityOptions): Record<string, string> {
   const filters: Record<string, string> = {};
@@ -62,40 +69,55 @@ export default class PiMemoryClient {
     }));
     return { results: page.results };
   }
-  async getAll(options: { readonly filters?: Record<string, string>; readonly includeExpired?: boolean } = {}) {
+  private async readListing(options: ListOptions, mode: "cursor" | "count") {
     const filters = options.filters ?? {};
     requireScope(filters);
-    const results: ReturnType<typeof memorySchema.parse>[] = [];
-    const seen = new Set<string>();
-    for (let page = 1; ; page += 1) {
-      const response = pageSchema.parse(await this.transport.call("get_memories", {
-        filters, page, page_size: 100, include_expired: options.includeExpired ?? false,
-      }));
-      if ((response.page !== undefined && response.page !== page)
-        || response.results.some(memory => seen.has(memory.id))) {
-        throw new Mem0McpError("Mem0 OSS pagination made no progress or repeated a page");
-      }
-      for (const memory of response.results) {
-        if (seen.has(memory.id)) throw new Mem0McpError("Mem0 OSS pagination repeated a memory ID");
-        seen.add(memory.id); results.push(memory);
-      }
-      if (response.has_more && ((response.total !== undefined && page * 100 >= response.total)
-        || (response.total === undefined && response.results.length === 0))) {
-        throw new Mem0McpError("Mem0 OSS pagination has inconsistent progress");
-      }
-      if (response.has_more === false) break;
-      if (response.has_more === undefined) {
-        if (response.truncated || (response.count ?? results.length) > results.length) {
-          throw new Mem0McpError("Mem0 OSS pagination requires a sidecar-backed MCP bridge");
-        }
-        break;
-      }
+    const pageSize = options.pageSize ?? 20;
+    if (!Number.isInteger(pageSize) || pageSize < 1 || pageSize > 100) {
+      throw new Mem0McpError("Mem0 OSS pageSize must be between 1 and 100");
     }
-    return { results, count: results.length };
+    const response = await this.transport.call("get_memories", {
+      filters, mode, include_expired: options.includeExpired ?? false,
+      ...(mode === "cursor" ? { page_size: pageSize, cursor: options.cursor } : {}),
+    }, options.signal);
+    const parsed = listingSchema.safeParse(response);
+    if (!parsed.success) {
+      throw new Mem0McpError("Invalid cursor listing response; requires mem0-oss-mcp 0.1.6+ and Sidecar 0.3.13+");
+    }
+    return parsed.data;
   }
-  private async requireScopedMemory(id: string, filters: Record<string, string>): Promise<ReturnType<typeof memorySchema.parse>> {
+  async getAll(options: ListOptions = {}) {
+    const page = await this.readListing(options, "cursor");
+    return { results: page.results, count: page.results.length, total: page.total, countBasis: page.count_basis,
+      hasMore: page.has_more, nextCursor: page.next_cursor, truncated: page.has_more };
+  }
+  async countAll(options: Pick<ListOptions, "filters" | "includeExpired" | "signal"> = {}) {
+    const page = await this.readListing(options, "count");
+    if (page.results.length || page.has_more) throw new Mem0McpError("Invalid Mem0 OSS count-only response");
+    return { total: page.total, countBasis: page.count_basis };
+  }
+  async *iterateAllPages(options: ListOptions = {}) {
+    let cursor = options.cursor;
+    const seenCursors = new Set<string>();
+    let previousIds = new Set<string>();
+    if (cursor) seenCursors.add(cursor);
+    for (;;) {
+      const page = await this.getAll({ ...options, pageSize: options.pageSize ?? 100, cursor });
+      const ids = new Set(page.results.map(memory => memory.id));
+      if (ids.size !== page.results.length || page.results.some(memory => previousIds.has(memory.id))
+        || (page.nextCursor !== null && seenCursors.has(page.nextCursor))) {
+        throw new Mem0McpError("Mem0 OSS pagination repeated a cursor or memory ID");
+      }
+      yield page;
+      if (page.nextCursor === null) return;
+      seenCursors.add(page.nextCursor);
+      cursor = page.nextCursor;
+      previousIds = ids;
+    }
+  }
+  private async requireScopedMemory(id: string, filters: Record<string, string>, signal?: AbortSignal): Promise<ReturnType<typeof memorySchema.parse>> {
     requireScope(filters);
-    const memory = memorySchema.parse(await this.transport.call("get_memory", { id }));
+    const memory = memorySchema.parse(await this.transport.call("get_memory", { id }, signal));
     if (memory.id !== id || Object.entries(filters).some(([key, value]) =>
       (memory[key] ?? memory.metadata?.[key]) !== value)) {
       throw new Mem0McpError("Memory is absent or outside the selected scope");
@@ -111,12 +133,12 @@ export default class PiMemoryClient {
     await this.transport.call("update_memory", { id, text: options.text, metadata: options.metadata ? { ...memory.metadata, ...options.metadata } : undefined });
     return { status: "Memory updated." };
   }
-  async delete(id: string, options: { readonly filters: Record<string, string> }) {
-    await this.requireScopedMemory(id, options.filters);
-    await this.transport.call("delete_memory", { id });
+  async delete(id: string, options: { readonly filters: Record<string, string>; readonly signal?: AbortSignal }) {
+    await this.requireScopedMemory(id, options.filters, options.signal);
+    await this.transport.call("delete_memory", { id }, options.signal);
     return { message: "Memory deleted." };
   }
-  async deleteAll(options: EntityOptions & { readonly filters?: Record<string, string> } = {}) {
+  async deleteAll(options: EntityOptions & { readonly filters?: Record<string, string>; readonly signal?: AbortSignal } = {}) {
     const filters = entityFilters(options);
     requireScope(filters);
     if (options.filters && Object.keys(options.filters).length) {
@@ -124,10 +146,21 @@ export default class PiMemoryClient {
       if (Object.keys(selected).some(key => !["user_id", "agent_id", "run_id", "app_id", "type"].includes(key))) {
         throw new Mem0McpError("Unsupported bulk-delete filter");
       }
-      const { results } = await this.getAll({ filters: selected, includeExpired: true });
-      for (const memory of results) await this.delete(memory.id, { filters: selected });
+      let deleted = 0;
+      try {
+        for await (const page of this.iterateAllPages({ filters: selected, includeExpired: true, signal: options.signal })) {
+          for (const memory of page.results) {
+            await this.delete(memory.id, { filters: selected, signal: options.signal });
+            deleted += 1;
+          }
+        }
+      } catch (error) {
+        if (error instanceof Error) throw new Mem0McpError(`Bulk delete stopped; ${deleted} deletions confirmed.`, { cause: error });
+        throw error;
+      }
+      return { message: `Deleted ${deleted} matching indexed memories from the selected scope.`, deletedCount: deleted };
     } else {
-      await this.transport.call("delete_all_memories", filters);
+      await this.transport.call("delete_all_memories", filters, options.signal);
     }
     return { message: "Deleted memories in the selected scope." };
   }

@@ -679,6 +679,48 @@ def get_memories(args: JSON) -> JSON:
         if args.get(key) is not None:
             values[key] = args[key]
 
+    mode = args.get("mode")
+    if mode is not None:
+        if mode not in ("cursor", "count"):
+            raise ValueError("get_memories mode must be cursor or count")
+        if not _uses_sidecar():
+            raise ValueError("Cursor listing requires a sidecar-backed MCP bridge")
+        if mode == "count" and any(
+            args.get(key) is not None for key in ("cursor", "page", "page_size")
+        ):
+            raise ValueError("Count mode does not accept cursor or page arguments")
+        normalized = normalize_filters(filters)
+        if not isinstance(normalized, dict) or any(
+            key not in {"user_id", "agent_id", "run_id", "app_id", "type"}
+            or not isinstance(value, str) or not value
+            for key, value in normalized.items()
+        ):
+            raise ValueError("Unsupported cursor listing filter")
+        values = normalized.copy()
+        for key in ("user_id", "agent_id", "run_id", "app_id"):
+            if args.get(key) is not None:
+                values[key] = args[key]
+        body = {
+            "project_id": Config.sidecar_project_id,
+            "mode": "page" if mode == "cursor" else "count",
+            "filters": {key: value for key, value in values.items() if key != "app_id"},
+            "include_expired": include_expired,
+        }
+        if mode == "cursor":
+            body.update(cursor=args.get("cursor"), page_size=args.get("page_size", 20))
+        requested_app_id = values.get("app_id")
+        if isinstance(requested_app_id, str) and requested_app_id != "*":
+            body["app_id"] = requested_app_id
+        else:
+            body["project_wide"] = True
+        result = _sidecar_backend("POST", "/v1/memories/scan", body)
+        if result.get("protocol") != "cursor-v1":
+            raise ValueError("Cursor listing requires Sidecar 0.3.13+")
+        return {
+            **result, "count": len(result["results"]),
+            "complete": not result["has_more"], "truncated": result["has_more"],
+        }
+
     if _uses_sidecar():
         filters = []
         for field_name in ("user_id", "agent_id", "app_id", "run_id"):
@@ -1109,6 +1151,9 @@ def tool_schema() -> list[JSON]:
                 {
                     "page": {"type": "integer"},
                     "page_size": {"type": "integer"},
+                    "mode": {"type": "string", "enum": ["cursor", "count"]},
+                    "cursor": {"type": "string"},
+                    "include_expired": {"type": "boolean"},
                     **common,
                 }
             ),

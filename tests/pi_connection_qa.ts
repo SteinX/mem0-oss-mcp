@@ -10,7 +10,7 @@ const calls: { readonly url: string; readonly key: string | null }[] = [];
 async function response(request: Request): Promise<Response> {
   const rpc: unknown = await request.json(); assert(record(rpc));
   calls.push({ url: request.url, key: request.headers.get("authorization") });
-  return Response.json({ jsonrpc: "2.0", id: rpc["id"], result: { content: [{ type: "text", text: '{"results":[],"has_more":false}' }] } });
+  return Response.json({ jsonrpc: "2.0", id: rpc["id"], result: { content: [{ type: "text", text: '{"protocol":"cursor-v1","results":[],"total":0,"count_basis":"sidecar_projection","next_cursor":null,"has_more":false}' }] } });
 }
 const old = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: response });
 const fresh = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: response });

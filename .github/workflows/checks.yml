@@ -28,6 +28,8 @@ jobs:
 
   pi-runtime:
     runs-on: ubuntu-latest
+    env:
+      PI_QA_SIDECAR_SOURCE: ${{ github.workspace }}/sidecar-source
     steps:
       - uses: actions/checkout@v6
         with:
@@ -35,6 +37,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - uses: actions/checkout@v6
+        with:
+          repository: SteinX/mem0-platform-sidecar
+          ref: 50014dbbcdfddc2445f81ceae8363d81acb108a9
+          path: sidecar-source
+      - name: Install the reviewed Sidecar runtime for real HTTP chain checks
+        run: python -m pip install ./sidecar-source
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
