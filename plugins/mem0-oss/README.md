@@ -110,25 +110,21 @@ required. Runtime `MEM0_OSS_AUTO_CAPTURE_MODE` and `MEM0_DREAM` values override
 these generated defaults.
 ## Pi
 
-`scripts/install_pi_plugin.py` generates a local copy of the official Pi
-extension using the Mem0 OSS REST API directly, with `X-API-Key` authentication.
-No MCP server or sidecar is required. See the repository README's Pi section
-for source requirements, scope behavior and configuration.
+`scripts/install_pi_plugin.py` generates the official Pi 0.3.2+ extension with an
+MCP adapter. It uses the same bridge and durable sidecar path as other clients.
 
 ```bash
-printf '%s\n' "$MEM0_OSS_API_KEY" | \
+printf '%s\n' "$MEM0_OSS_MCP_TOKEN" | \
   python3 plugins/mem0-oss/scripts/install_pi_plugin.py \
-  --url http://<mem0-core-host>:<port> \
-  --upstream-plugin-dir /path/to/mem0-checkout \
-  --api-key-stdin \
-  --install
+  --url http://<mcp-host>:<port>/mcp \
+  --token-stdin --install
 ```
 
-Generation requires Node.js for the same URL/IDNA validation as Pi. Use the
-Core REST base URL without `/mcp` or `/v1`, and a Core API key rather
-than an MCP bearer token. `--install` preserves other Pi settings and registers
-the generated package once. `--no-build` uses Pi's TypeScript loading. API keys
-remain in an owner-only env file outside the generated package. Runtime
-`MEM0_OSS_BASE_URL` and `MEM0_OSS_API_KEY` can override the connection. Supply
-an explicit runtime key when changing origin; the installed private-file key
-is restricted to its configured origin.
+Use `--pi-dir ~/.omo/agent` for omo native; the directory is also embedded as the
+runtime config default. Explicit agent-dir environment variables take precedence.
+Automatic capture is off by default, project identity follows Git origin, and
+recall is hidden message context with a fixed system policy and Senpi preview-safe
+registration. Lists use sidecar pagination; ID mutations verify scope via ID reads.
+Tokens remain in a private file outside the package and are bound to its origin.
+Regenerate older Core REST copies with an MCP URL/token. See the repository README
+for dependency installation, overrides, migration and runtime checks.

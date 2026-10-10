@@ -25,20 +25,20 @@ class Connection:
     env_file: Path | None
 
 
-def validate_rest_url(value: str) -> str:
+def validate_mcp_url(value: str) -> str:
     normalized = value.strip()
     if (
         not normalized.lower().startswith(("http://", "https://"))
         or "\\" in normalized
         or any(ord(char) < 32 or ord(char) == 127 for char in normalized)
     ):
-        raise InstallerError("--url must be an absolute http(s) REST URL")
+        raise InstallerError("--url must be an absolute http(s) MCP URL")
     script = r"""
 try {
   const url = new URL(process.argv[1]);
   if (!["http:", "https:"].includes(url.protocol) || !url.hostname
     || url.username || url.password || url.search || url.hash
-    || ["/mcp", "/v1"].some((suffix) => url.pathname.replace(/\/+$/, "").endsWith(suffix))) {
+    || !url.pathname.replace(/\/+$/, "").endsWith("/mcp")) {
     process.exit(1);
   }
   process.stdout.write(url.href.replace(/\/+$/, ""));
@@ -60,7 +60,7 @@ try {
         raise InstallerError("Node.js could not validate --url") from error
     if result.returncode != 0:
         raise InstallerError(
-            "--url must be a valid OSS REST base URL without credentials, query, fragment, /mcp or /v1"
+            "--url must be a valid OSS MCP URL without credentials, query or fragment, ending in /mcp"
         )
     return result.stdout.rstrip("/")
 

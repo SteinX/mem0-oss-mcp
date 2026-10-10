@@ -13,18 +13,22 @@ class Mem0ConnectionError extends Error {
   }
 }
 
-export function validateRestBaseUrl(value: string): string {
+export function validateMcpUrl(value: string): string {
+  const raw = value.trim();
+  if (!/^https?:\/\//i.test(raw) || /[\\\x00-\x1f\x7f]/.test(raw)) {
+    throw new Mem0ConnectionError("Mem0 OSS MCP URL must be an absolute http(s) URL");
+  }
   let url: URL;
   try {
-    url = new URL(value.trim());
+    url = new URL(raw);
   } catch (error) {
-    if (error instanceof TypeError) throw new Mem0ConnectionError("Mem0 OSS base URL must be an absolute http(s) URL");
+    if (error instanceof TypeError) throw new Mem0ConnectionError("Mem0 OSS MCP URL must be an absolute http(s) URL");
     throw error;
   }
   if (!["http:", "https:"].includes(url.protocol) || !url.hostname
     || url.username || url.password || url.search || url.hash
-    || ["/mcp", "/v1"].some((suffix) => url.pathname.replace(/\/+$/, "").endsWith(suffix))) {
-    throw new Mem0ConnectionError("Mem0 OSS base URL must use http(s), without credentials, query, fragment, /mcp or /v1");
+    || !url.pathname.replace(/\/+$/, "").endsWith("/mcp")) {
+    throw new Mem0ConnectionError("Mem0 OSS MCP URL must use http(s), without credentials, query or fragment, ending in /mcp");
   }
   return url.href.replace(/\/+$/, "");
 }
@@ -60,11 +64,11 @@ function dotenvValue(raw: string): string {
 }
 
 export function initializeMem0OssEnv(options: ConnectionOptions): void {
-  const baseUrl = validateRestBaseUrl(process.env.MEM0_OSS_BASE_URL || options.url);
-  const keyName = process.env.MEM0_OSS_API_KEY_ENV_VAR || options.apiKeyEnvVar;
+  const baseUrl = validateMcpUrl(process.env.MEM0_OSS_MCP_URL || options.url);
+  const keyName = process.env.MEM0_OSS_MCP_TOKEN_ENV_VAR || options.apiKeyEnvVar;
   const envFile = process.env.MEM0_OSS_ENV_FILE || options.envFile;
   let key = process.env[keyName];
-  if (!key && new URL(baseUrl).origin !== new URL(validateRestBaseUrl(options.url)).origin) {
+  if (!key && new URL(baseUrl).origin !== new URL(validateMcpUrl(options.url)).origin) {
     throw new Mem0ConnectionError("Mem0 OSS endpoint override for a different origin requires an explicit runtime API key");
   }
   if (!key && envFile) {
@@ -76,7 +80,7 @@ export function initializeMem0OssEnv(options: ConnectionOptions): void {
     }
   }
   key ||= process.env.MEM0_API_KEY;
-  process.env.MEM0_OSS_PI_RESOLVED_BASE_URL = baseUrl;
+  process.env.MEM0_OSS_PI_RESOLVED_MCP_URL = baseUrl;
   if (key) process.env.MEM0_OSS_PI_RESOLVED_API_KEY = key;
   else delete process.env.MEM0_OSS_PI_RESOLVED_API_KEY;
   process.env.MEM0_TELEMETRY ??= "false";
