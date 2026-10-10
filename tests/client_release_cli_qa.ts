@@ -92,12 +92,13 @@ class Rpc {
   stop(): void { this.child.kill("SIGTERM"); }
 }
 const digest = (path: string) => createHash("sha256").update(readFileSync(path)).digest("hex");
+const codexInstructions = "Preserve this example:\n[features]\ncodex_hooks = false\n";
 try {
   for (const client of ["codex", "opencode"] as const) {
     const callsBeforeClient = calls.length;
     const host = join(root, client);
     mkdirSync(host, {recursive: true});
-    if (client === "codex") writeFileSync(join(host, "config.toml"), 'model = "gpt-5.4"\n[features] # native feature flags\ncodex_hooks = true\n');
+    if (client === "codex") writeFileSync(join(host, "config.toml"), `developer_instructions = """${codexInstructions}"""\nmodel = "gpt-5.4"\nfeatures.codex_hooks = false # native feature flags\n`);
     else writeFileSync(join(host, "opencode.json"), JSON.stringify({$schema: "https://opencode.ai/config.json", model: "fixture/test", provider: {fixture: {npm: "@ai-sdk/openai-compatible", name: "Fixture", models: {test: {name: "Test", limit: {context: 32768, output: 1024}}}, options: {baseURL: `http://127.0.0.1:${backend.port}/v1`, apiKey: "fixture-model-key"}}}}));
     const installRoot = join(root, "installation");
     const hostConfig = join(host, client === "codex" ? "config.toml" : "opencode.json");
@@ -136,7 +137,11 @@ try {
       assert.deepEqual([digest(config), digest(secret)], before);
       assert.equal(readFileSync(join(data, "preserved-setting.json"), "utf8"), '{"keep":"fixture-setting"}');
       const hostConfigNow = readFileSync(hostConfig, "utf8");
-      if (client === "codex") assert(hostConfigNow.includes(hostConfigBefore.trim()));
+      if (client === "codex") {
+        const nativeConfig = z.object({model: z.string(), developer_instructions: z.string(), features: z.object({codex_hooks: z.literal(true)}).passthrough()}).passthrough().parse(JSON.parse(await run(["python3", "-c", "import json,sys,tomllib; from pathlib import Path; print(json.dumps(tomllib.loads(Path(sys.argv[1]).read_text())))", hostConfig])));
+        assert.equal(nativeConfig.model, "gpt-5.4");
+        assert.equal(nativeConfig.developer_instructions, codexInstructions);
+      }
       else assert.equal(hostConfigNow, hostConfigBefore);
     };
     await verify();

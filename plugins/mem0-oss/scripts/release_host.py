@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shlex
 import subprocess
 from pathlib import Path
@@ -67,33 +66,14 @@ def bind_codex(package: Path, config: Path, runtime_root: Path | None = None) ->
 
 
 def enable_hooks(path: Path) -> None:
-    text = path.read_text() if path.exists() else ""
-    lines = text.splitlines(keepends=True)
-    header = re.compile(r"\[\s*(?:features|\"features\"|'features')\s*\]\s*(?:#.*)?")
-    assignment = re.compile(
-        r"([ \t]*(?:codex_hooks|\"codex_hooks\"|'codex_hooks')[ \t]*=[ \t]*)(?:false|true)([ \t]*(?:#[^\r\n]*)?\r?\n?)$"
-    )
-    for index, line in enumerate(lines):
-        if not header.fullmatch(line.strip()):
-            continue
-        enabled = False
-        for offset in range(index + 1, len(lines)):
-            if lines[offset].lstrip().startswith("["):
-                break
-            if assignment.fullmatch(lines[offset]):
-                lines[offset] = assignment.sub(r"\g<1>true\g<2>", lines[offset])
-                enabled = True
-                break
-        if not enabled:
-            if not line.endswith("\n"):
-                lines[index] += "\n"
-            lines.insert(index + 1, "codex_hooks = true\n")
-        text = "".join(lines)
-        break
-    else:
-        text += "\n[features]\ncodex_hooks = true\n"
     path.parent.mkdir(parents=True, exist_ok=True)
-    _ = path.write_text(text)
+    _ = subprocess.run(
+        ["codex", "features", "enable", "codex_hooks"],
+        env={**os.environ, "CODEX_HOME": str(path.parent)},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
 
 
 def register(client: Client, root: Path, host: Path, config: Path) -> None:
