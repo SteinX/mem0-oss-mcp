@@ -97,7 +97,7 @@ try {
     const callsBeforeClient = calls.length;
     const host = join(root, client);
     mkdirSync(host, {recursive: true});
-    if (client === "codex") writeFileSync(join(host, "config.toml"), 'model = "gpt-5.4"\n');
+    if (client === "codex") writeFileSync(join(host, "config.toml"), 'model = "gpt-5.4"\n[features] # native feature flags\ncodex_hooks = true\n');
     else writeFileSync(join(host, "opencode.json"), JSON.stringify({$schema: "https://opencode.ai/config.json", model: "fixture/test", provider: {fixture: {npm: "@ai-sdk/openai-compatible", name: "Fixture", models: {test: {name: "Test", limit: {context: 32768, output: 1024}}}, options: {baseURL: `http://127.0.0.1:${backend.port}/v1`, apiKey: "fixture-model-key"}}}}));
     const installRoot = join(root, "installation");
     const hostConfig = join(host, client === "codex" ? "config.toml" : "opencode.json");

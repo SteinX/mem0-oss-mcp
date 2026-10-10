@@ -68,14 +68,28 @@ def bind_codex(package: Path, config: Path, runtime_root: Path | None = None) ->
 
 def enable_hooks(path: Path) -> None:
     text = path.read_text() if path.exists() else ""
-    feature = re.search(r"(?ms)^\[features\]\s*\n(.*?)(?=^\[|\Z)", text)
-    if feature:
-        body = feature.group(1)
-        if re.search(r"(?m)^\s*codex_hooks\s*=", body):
-            body = re.sub(r"(?m)^\s*codex_hooks\s*=.*$", "codex_hooks = true", body)
-        else:
-            body = "codex_hooks = true\n" + body
-        text = text[: feature.start(1)] + body + text[feature.end(1) :]
+    lines = text.splitlines(keepends=True)
+    header = re.compile(r"\[\s*(?:features|\"features\"|'features')\s*\]\s*(?:#.*)?")
+    assignment = re.compile(
+        r"([ \t]*(?:codex_hooks|\"codex_hooks\"|'codex_hooks')[ \t]*=[ \t]*)(?:false|true)([ \t]*(?:#[^\r\n]*)?\r?\n?)$"
+    )
+    for index, line in enumerate(lines):
+        if not header.fullmatch(line.strip()):
+            continue
+        enabled = False
+        for offset in range(index + 1, len(lines)):
+            if lines[offset].lstrip().startswith("["):
+                break
+            if assignment.fullmatch(lines[offset]):
+                lines[offset] = assignment.sub(r"\g<1>true\g<2>", lines[offset])
+                enabled = True
+                break
+        if not enabled:
+            if not line.endswith("\n"):
+                lines[index] += "\n"
+            lines.insert(index + 1, "codex_hooks = true\n")
+        text = "".join(lines)
+        break
     else:
         text += "\n[features]\ncodex_hooks = true\n"
     path.parent.mkdir(parents=True, exist_ok=True)
