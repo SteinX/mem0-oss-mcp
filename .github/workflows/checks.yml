@@ -40,7 +40,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           repository: SteinX/mem0-platform-sidecar
-          ref: b2a399de086dbca419a62d731e9c2197158e9ded
+          ref: 08626c487d51d3924e9e75d04b07c733ba2f72e5
           path: sidecar-source
       - name: Install the reviewed Sidecar runtime for real HTTP chain checks
         run: python -m pip install ./sidecar-source
