@@ -91,6 +91,6 @@ def test_malformed_include_expired_is_rejected_before_backend(value):
         patch.object(server.Config, "sidecar_base_url", "http://fixture.invalid"),
         patch.object(server, "_sidecar_backend") as downstream,
     ):
-        with pytest.raises(ValueError, match="boolean"):
+        with pytest.raises(TypeError, match="boolean"):
             server.get_memories({"mode": "count", "include_expired": value})
         downstream.assert_not_called()

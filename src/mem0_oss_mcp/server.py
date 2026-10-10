@@ -674,7 +674,7 @@ def search_memories(args: JSON) -> Any:
 def get_memories(args: JSON) -> JSON:
     include_expired = args.get("include_expired", False)
     if not isinstance(include_expired, bool):
-        raise ValueError("get_memories include_expired must be a boolean")
+        raise TypeError("get_memories include_expired must be a boolean")
     filters = args.get("filters") or {}
     values = _filter_values(filters)
     for key in ("user_id", "agent_id", "run_id", "app_id"):
@@ -701,6 +701,8 @@ def get_memories(args: JSON) -> JSON:
         values = normalized.copy()
         for key in ("user_id", "agent_id", "run_id", "app_id"):
             if args.get(key) is not None:
+                if not isinstance(args[key], str) or not args[key]:
+                    raise ValueError(f"get_memories {key} must be a non-empty string")
                 values[key] = args[key]
         body = {
             "project_id": Config.sidecar_project_id,
