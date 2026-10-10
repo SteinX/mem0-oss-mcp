@@ -62,11 +62,13 @@ class Arguments(argparse.Namespace):
     )
     no_build: bool = False
     install: bool = False
+    portable: bool = False
 
 
 def parse_args() -> Arguments:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--url", required=True, help="Absolute Mem0 OSS MCP /mcp URL")
+    parser.add_argument("--url", default="", help="Absolute Mem0 OSS MCP /mcp URL; required unless --portable")
+    parser.add_argument("--portable", action="store_true", help="Generate a distributable package configured at runtime")
     parser.add_argument("--name", default=Arguments.name)
     parser.add_argument(
         "--token-env-var",
@@ -109,6 +111,8 @@ def parse_args() -> Arguments:
 
 def main() -> int:
     args = parse_args()
+    if args.portable and (args.url or args.install or args.api_key_stdin or args.api_key is not None or args.env_file is not None):
+        raise InstallerError("portable packages cannot include connection credentials, an endpoint or installation settings")
     name = normalize_name(args.name)
     source = validate_source(args.upstream_plugin_dir)
     base = args.target_root.expanduser().resolve()
@@ -129,7 +133,7 @@ def main() -> int:
             "credential env file must be outside the generated package"
         )
     connection = Connection(
-        validate_mcp_url(args.url), validate_env_var(args.api_key_env_var), env_file
+        validate_mcp_url(args.url) if not args.portable else "", validate_env_var(args.api_key_env_var), env_file
     )
     settings_path = args.pi_dir.expanduser().resolve() / "settings.json"
     settings = (
@@ -167,8 +171,8 @@ def main() -> int:
             "mem0_oss_pi_listing.ts",
         ):
             copy_adapter_file(adapter / filename, staging / filename)
-        patch_sources(staging, connection)
-        patch_runtime(staging, args.pi_dir.expanduser().resolve())
+        patch_sources(staging, connection, portable=args.portable)
+        patch_runtime(staging, None if args.portable else args.pi_dir.expanduser().resolve())
         package = load_json(staging / "package.json")
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
         package.update(name=f"@mem0-oss/{name}-pi-plugin", private=True)
@@ -237,7 +241,7 @@ def main() -> int:
     if args.install:
         print(f"Registered Pi package in: {settings_path}")
     print(f"Generated Pi OSS plugin: {target}")
-    print(f"OSS MCP URL: {connection.url}")
+    print(f"OSS MCP URL: {connection.url or 'set MEM0_OSS_MCP_URL at runtime'}")
     if not args.install:
         print(f"Install with: pi install {target}")
     return 0

@@ -1,0 +1,57 @@
+name: Publish Pi plugin archives
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing release to attach portable packages to
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: pi-release-${{ github.event.release.tag_name || inputs.release_tag }}
+      cancel-in-progress: false
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.release.tag_name || github.sha }}
+          submodules: true
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: "10.28.1"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.2.14"
+      - name: Verify release and build archives
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
+          bash plugins/mem0-oss/scripts/build_pi_release.sh "${RELEASE_TAG#v}" "$RUNNER_TEMP/pi-assets"
+      - name: Install extracted package in Pi and Senpi
+        run: |
+          bash tests/run_pi_release_qa.sh "$RUNNER_TEMP/pi-assets" "${RELEASE_TAG#v}"
+      - name: Upload tested release attachments
+        run: |
+          gh release upload "$RELEASE_TAG" "$RUNNER_TEMP/pi-assets/"* \
+            --repo "$GITHUB_REPOSITORY" --clobber

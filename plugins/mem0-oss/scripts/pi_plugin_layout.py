@@ -87,7 +87,7 @@ def validate_source(path: Path) -> Path:
     return source
 
 
-def patch_sources(plugin: Path, connection: Connection) -> None:
+def patch_sources(plugin: Path, connection: Connection, *, portable: bool = False) -> None:
     for path in (plugin / "src").rglob("*.ts"):
         content = path.read_text(encoding="utf-8")
         client = os.path.relpath(plugin / "mem0_oss_pi_client.ts", path.parent)
@@ -103,9 +103,10 @@ def patch_sources(plugin: Path, connection: Connection) -> None:
         path.write_text(content, encoding="utf-8")
     entry = plugin / "src/entry.ts"
     content = entry.read_text(encoding="utf-8")
+    url = 'process.env.MEM0_OSS_MCP_URL || ""' if portable else js_literal(connection.url)
     init = (
         "  initializeMem0OssEnv({\n"
-        f"    url: {js_literal(connection.url)},\n"
+        f"    url: {url},\n"
         f"    apiKeyEnvVar: {js_literal(connection.api_key_env_var)},\n"
         f"    envFile: {js_literal(str(connection.env_file) if connection.env_file else None)},\n"
         "  });\n"

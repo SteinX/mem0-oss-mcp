@@ -302,6 +302,15 @@ submodule and rerun `install_opencode_plugin.py`.
 
 ## Pi plugin
 
+Releases include prebuilt `mem0-oss-pi-<version>.zip`, `.tar.gz` and `.sha256`
+attachments. Extract a package into a persistent directory and run
+`pi install /path/to/mem0-oss`. Set your MCP endpoint and credentials at runtime;
+no local build or upstream checkout is required. See
+[archive installation](docs/pi-release-package.md) for Pi and Senpi configuration.
+The `Publish Pi plugin archives` workflow builds, installs and tests the extracted
+package before uploading it. Manual dispatch can add attachments to an existing
+release; `provenance.json` records the generator commit used for that build.
+
 Generate the official Pi 0.3.2+ extension with a self-hosted MCP adapter. Pi uses
 Bearer authentication against the bridge's `/mcp` endpoint. Use a bridge configured
 with Sidecar 0.3.13 or later and bridge 0.1.6 or later for cursor traversal,
