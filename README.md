@@ -302,80 +302,74 @@ submodule and rerun `install_opencode_plugin.py`.
 
 ## Pi plugin
 
-Generate a local Pi extension from the official `integrations/pi-agent-plugin`
-source. Use a Mem0 checkout with Pi plugin 0.3.2 or later and its sibling
-`integrations/agent-plugin-core` directory:
+Generate the official Pi 0.3.2+ extension with a self-hosted MCP adapter. Pi uses
+Bearer authentication against the bridge's `/mcp` endpoint. Use a bridge configured
+with Sidecar 0.3.12 or later for pagination, write idempotency and caller-bound
+event receipts. Earlier sidecars can persist an authenticated add and then fail
+the bridge's event ownership check because the receipt lacks its channel.
+The Core REST adapter shipped in the initial Pi implementation is replaced;
+regenerate it using your MCP URL and MCP token.
 
 ```bash
-printf '%s\n' "$MEM0_OSS_API_KEY" | \
+printf '%s\n' "$MEM0_OSS_MCP_TOKEN" | \
   python3 plugins/mem0-oss/scripts/install_pi_plugin.py \
-  --url http://<mem0-core-host>:<port> \
+  --url http://<mcp-host>:<port>/mcp \
   --upstream-plugin-dir /path/to/mem0-checkout \
-  --api-key-stdin \
+  --token-stdin \
   --install
 ```
 
-Pi calls the Mem0 OSS REST API directly with `X-API-Key`. It does not require an
-MCP server, sidecar, `mem0ai`, or a cloud account. Supply the Core API base URL,
-without `/mcp` or `/v1`. `MEM0_OSS_BASE_URL` can override the generated endpoint
-at runtime. A different origin requires an explicit runtime API key; the
-installed private-file key is only loaded for the configured origin. Runtime
-URLs receive the same REST URL validation as the installer. Keep the Core
-endpoint reachable from Pi; a reverse proxy may route
-the same REST paths through a sidecar, so select the actual Core endpoint when
-you want direct Core access.
+The default upstream source is `third_party/mem0`; it must include the sibling
+`integrations/agent-plugin-core` directory. Missing patch anchors stop generation
+before replacing the active installation. Node.js validates URLs with the same
+WHATWG semantics as the runtime. Building requires pnpm; `--no-build` uses the
+host's TypeScript loader and requires the generated package's `zod` dependency
+(`pnpm install --prod` inside the package).
 
-The installer keeps official Pi commands, skills, project/session/global scopes,
-automatic recall and redacted conversation capture. It rejects upstream sources
-missing the shared core before replacing an existing installation. The default
-upstream source is `third_party/mem0`.
+Packages live in `~/.mem0-oss/pi-plugins/<name>`. Tokens stay outside the package
+in an owner-only env file. Use `--env-file` and `--token-env-var` for an existing
+private file. The older `--api-key*` flag spellings remain aliases for MCP tokens.
+Runtime overrides are `MEM0_OSS_MCP_URL`, `MEM0_OSS_MCP_TOKEN` and
+`MEM0_OSS_MCP_TOKEN_ENV_VAR`. An endpoint override to a different origin requires
+an explicit runtime token; it cannot reuse the installed file token. Credentials,
+query strings, fragments and redirects are rejected. Writes are never retried.
 
-Generated packages live in `~/.mem0-oss/pi-plugins/<name>`. API keys are stored
-outside the package in an owner-only dotenv file. Use `--env-file` with
-`--api-key-env-var` for an existing private file, or provide `MEM0_OSS_API_KEY`
-in Pi's environment. Pi's usual `mem0-config.json` API key is also supported.
-`--install` adds the absolute package path to Pi's `settings.json` without
-changing other settings or duplicating entries. Existing packages are retained
-as timestamped backups; a failed build leaves the active package and settings
-unchanged. Settings are replaced atomically; a failed settings commit restores
-the previous package and credentials.
+`--install` adds the generated package to `settings.json` once and preserves
+other settings. Existing packages remain as timestamped backups; build or settings
+commit failures retain/restore the active package and credentials. `--pi-dir`
+selects both settings and the generated default config directory. Runtime
+`OMO_CODING_AGENT_DIR`, `SENPI_CODING_AGENT_DIR`, then `PI_CODING_AGENT_DIR` override
+it. For omo native, install with `--pi-dir ~/.omo/agent`, then restart or `/reload`.
+Remove the previous Mem0 extension from settings before enabling this copy to
+avoid duplicate tools and commands. Preserve any unrelated model auth extension.
 
-Generation requires Node.js so installer URL parsing uses Pi's WHATWG URL
-semantics, including IDNA validation. Building also requires pnpm and the
-upstream development dependencies. Use
-`--no-build` for Pi's direct TypeScript loading, which uses Pi's host packages.
-`--pi-dir` selects the settings directory; set `PI_CODING_AGENT_DIR` at runtime
-to use that directory. Restart Pi or run `/reload` after installation. Regenerating
-and reloading refreshes the configured endpoint and file-backed key; explicit
-runtime overrides remain in effect. Avoid
-loading the cloud Mem0 package and this OSS copy in the same session, because
-they register the same tools and commands.
+Identity is `MEM0_USER_ID` / `userId` for the user, and `MEM0_APP_ID`, then the Git
+origin's owner-repository name, then the repository/directory basename for the app.
+This keeps separate checkouts of the same remote in the same project scope.
 
-Pi's `mem0-config.json` options remain available, including `userId`,
-`defaultScope`, `contextInjection` and `autoCapture`. To disable conversation
-writes while retaining explicit commands, use `{"autoCapture": false}`.
-`MEM0_USER_ID` can align identity with other clients. The official Pi plugin
-derives the project `app_id` from the repository directory name. The direct
-adapter stores it in memory metadata and uses it as a search filter; sharing
-with another client requires matching user and project metadata.
+`mem0-config.json` retains `defaultScope`, `contextInjection`, `searchThreshold`
+and `autoCapture`. Capture defaults to **false**. Explicit saves use `infer=false`;
+opt-in automatic capture is redacted and marked `metadata.type=auto_capture`.
+The tool accepts `metadata` on add/update and string `filters` on search/list and
+ID operations. Extra filters cannot override the selected user/app/run scope;
+filtered bulk deletion supports the bridge's entity and `type` filters only.
+Select `/mem0-scope global` explicitly before requesting global tool scope.
 
-Writes return synchronous OSS results rather than asynchronous event receipts;
-no writes are retried automatically. OSS does not accept the cloud SDK's
-`customCategories`, `rerank`, or `source` body options. Pi attribution headers
-are forwarded; memory inference and optional reranking run on the server.
-Project listing fetches the entity scope and filters `metadata.app_id` locally.
-Single-ID updates and deletes first verify membership in the selected scope.
-Scoped deletion includes expired memories and deletes matching IDs individually,
-never the broader user-level bulk endpoint. A full fetch window is treated as
-potential truncation and stops listing and ID mutations before any write. The default
-window is 1000; `MEM0_OSS_LIST_FETCH_LIMIT` can raise it within the Core server's
-configured limit. Multi-row lists also probe `top_k=1`; a backend ignoring the
-limit stops listing and mutations. A returned count matching the configured
-legacy cap is treated as potentially incomplete when a larger window was
-requested. `MEM0_OSS_BACKEND_LIST_RETRY_LIMIT` sets that cap (default 1000),
-matching the bridge's configuration; in Pi it never enables retries. Set it to
-the known cap for other backends. If a delete fails partway, the error reports
-completed deletes.
+The system prompt contains a fixed conservative memory policy. Variable recall
+is a hidden `mem0-recall` message. Senpi's `previewSafe` hook returns the same
+system prefix during prewarm without fetching memories or consuming recall state;
+upstream Pi ignores the optional registration flag. Both runtimes are exercised
+in CI. This does not establish a particular provider's cache hit rate or cost.
+
+Listing follows MCP `has_more` pages rather than Core `top_k` windows, and returns
+the number of visible memories. ID mutations first read that ID and verify its
+scope. Unfiltered bulk deletion uses the bridge's scoped endpoint; narrowed
+bulk deletion enumerates selected IDs before deleting. Add returns the durable
+event ID. Cloud-only custom categories and rerank/source body options are ignored.
+
+Run source/build/runtime verification with `tests/run_pi_qa.sh` (Node 24, pnpm,
+Bun and the pinned submodule). Production data and daily extension settings are
+not touched by these fixtures.
 
 ## Run
 

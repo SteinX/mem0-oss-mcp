@@ -3,8 +3,8 @@
 # requires-python = ">=3.10"
 # dependencies = []
 # ///
-# Run: python3 install_pi_plugin.py --url https://mem0.example --install
-"""Generate and optionally install the official Pi extension for the Mem0 OSS REST API."""
+# Run: python3 install_pi_plugin.py --url https://mem0.example/mcp --install
+"""Generate and optionally install the official Pi extension for the Mem0 OSS MCP bridge."""
 
 from __future__ import annotations
 
@@ -34,11 +34,13 @@ from install_opencode_plugin import (
     validate_token_value,
 )
 
+from pi_runtime_patches import patch_runtime
+
 from pi_plugin_layout import (
     Connection,
     InstallerError,
     patch_sources,
-    validate_rest_url,
+    validate_mcp_url,
     validate_source,
 )
 
@@ -46,14 +48,17 @@ from pi_plugin_layout import (
 class Arguments(argparse.Namespace):
     url: str = ""
     name: str = "mem0-oss"
-    api_key_env_var: str = "MEM0_OSS_API_KEY"
+    api_key_env_var: str = "MEM0_OSS_MCP_TOKEN"
     api_key_stdin: bool = False
     api_key: str | None = None
     env_file: Path | None = None
     target_root: Path = Path.home() / ".mem0-oss/pi-plugins"
     upstream_plugin_dir: Path = repo_root_from_script() / "third_party/mem0"
     pi_dir: Path = Path(
-        os.environ.get("PI_CODING_AGENT_DIR", Path.home() / ".pi/agent")
+        os.environ.get("OMO_CODING_AGENT_DIR")
+        or os.environ.get("SENPI_CODING_AGENT_DIR")
+        or os.environ.get("PI_CODING_AGENT_DIR")
+        or Path.home() / ".pi/agent"
     )
     no_build: bool = False
     install: bool = False
@@ -61,18 +66,27 @@ class Arguments(argparse.Namespace):
 
 def parse_args() -> Arguments:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--url", required=True, help="Absolute Mem0 OSS REST base URL")
+    parser.add_argument("--url", required=True, help="Absolute Mem0 OSS MCP /mcp URL")
     parser.add_argument("--name", default=Arguments.name)
-    parser.add_argument("--api-key-env-var", default=Arguments.api_key_env_var)
+    parser.add_argument(
+        "--token-env-var",
+        "--api-key-env-var",
+        dest="api_key_env_var",
+        default=Arguments.api_key_env_var,
+    )
     tokens = parser.add_mutually_exclusive_group()
     tokens.add_argument(
+        "--token-stdin",
         "--api-key-stdin",
+        dest="api_key_stdin",
         action="store_true",
-        help="Read API key from stdin into a private env file",
+        help="Read MCP bearer token from stdin into a private env file",
     )
     tokens.add_argument(
+        "--token",
         "--api-key",
-        help="API key value; prefer --api-key-stdin to avoid process listings",
+        dest="api_key",
+        help="MCP token value; prefer --token-stdin to avoid process listings",
     )
     parser.add_argument("--env-file", type=Path)
     parser.add_argument("--target-root", type=Path, default=Arguments.target_root)
@@ -115,7 +129,7 @@ def main() -> int:
             "credential env file must be outside the generated package"
         )
     connection = Connection(
-        validate_rest_url(args.url), validate_env_var(args.api_key_env_var), env_file
+        validate_mcp_url(args.url), validate_env_var(args.api_key_env_var), env_file
     )
     settings_path = args.pi_dir.expanduser().resolve() / "settings.json"
     settings = (
@@ -145,14 +159,21 @@ def main() -> int:
             staging / "src/agent-plugin-core",
         )
         adapter = plugin_root_from_script() / "scripts/oss_adapter"
-        for filename in ("mem0_oss_pi_env.ts", "mem0_oss_pi_client.ts"):
+        for filename in (
+            "mem0_oss_pi_env.ts",
+            "mem0_oss_pi_client.ts",
+            "mem0_oss_pi_transport.ts",
+            "mem0_oss_pi_recall.ts",
+        ):
             copy_adapter_file(adapter / filename, staging / filename)
         patch_sources(staging, connection)
+        patch_runtime(staging, args.pi_dir.expanduser().resolve())
         package = load_json(staging / "package.json")
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
         package.update(name=f"@mem0-oss/{name}-pi-plugin", private=True)
         package["version"] = str(package["version"]).split("+", 1)[0] + f"+oss.{stamp}"
         package.get("dependencies", {}).pop("mem0ai", None)
+        package.setdefault("dependencies", {})["zod"] = "^4.0.0"
         package["pi"]["extensions"] = [
             "./src/entry.ts" if args.no_build else "./dist/entry.js"
         ]
@@ -215,7 +236,7 @@ def main() -> int:
     if args.install:
         print(f"Registered Pi package in: {settings_path}")
     print(f"Generated Pi OSS plugin: {target}")
-    print(f"OSS REST URL: {connection.url}")
+    print(f"OSS MCP URL: {connection.url}")
     if not args.install:
         print(f"Install with: pi install {target}")
     return 0

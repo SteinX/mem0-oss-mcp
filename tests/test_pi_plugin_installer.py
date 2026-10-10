@@ -25,7 +25,7 @@ def run_installer(
             sys.executable,
             str(INSTALLER),
             "--url",
-            "https://mem0.example.test",
+            "https://mem0.example.test/mcp",
             "--upstream-plugin-dir",
             str(pi_upstream),
             "--target-root",
@@ -41,12 +41,12 @@ def run_installer(
 
 
 def test_generation_preserves_native_resources_and_keeps_api_key_private(
-    tmp_path: Path, pi_upstream: Path, pi_core_url: str
+    tmp_path: Path, pi_upstream: Path, pi_mcp_url: str
 ) -> None:
     # Given an official package and token supplied through stdin.
     # When a standalone OSS copy is generated.
     result = run_installer(
-        tmp_path, pi_upstream, "--api-key-stdin", "--url", pi_core_url
+        tmp_path, pi_upstream, "--api-key-stdin", "--url", pi_mcp_url
     )
     # Then native resources survive and credentials stay outside the package.
     assert result.returncode == 0, result.stderr
@@ -63,7 +63,7 @@ def test_generation_preserves_native_resources_and_keeps_api_key_private(
     )
     assert (plugin / "src/agent-plugin-core/lifecycle.ts").is_file()
     assert (
-        "filters: resolveSearchFilters(scope, scopeCtx)"
+        "...params.filters, ...resolveSearchFilters(scope, scopeCtx)"
         in (plugin / "src/memory/tools.ts").read_text()
     )
     assert (
@@ -71,7 +71,8 @@ def test_generation_preserves_native_resources_and_keeps_api_key_private(
         in (plugin / "src/commands.ts").read_text()
     )
     assert not (plugin / "mem0_oss_memory_client.ts").exists()
-    assert "MEM0_OSS_MCP" not in (plugin / "mem0_oss_pi_client.ts").read_text()
+    assert (plugin / "mem0_oss_pi_transport.ts").exists()
+    assert package["dependencies"]["zod"] == "^4.0.0"
     env_file = tmp_path / "generated/env/mem0-oss.env"
     assert stat.S_IMODE(env_file.stat().st_mode) == 0o600
     assert "test-token-with-" not in result.stdout
@@ -139,7 +140,7 @@ def test_build_failure_preserves_installed_package_and_settings(
             sys.executable,
             str(INSTALLER),
             "--url",
-            "https://mem0.example.test",
+            "https://mem0.example.test/mcp",
             "--upstream-plugin-dir",
             str(pi_upstream),
             "--target-root",
@@ -182,7 +183,7 @@ def test_credentials_inside_package_are_rejected(
     "url",
     [
         "invalid",
-        "https://mem0.test/mcp",
+        "https://mem0.test",
         "https://mem0.test/v1",
         "https://mem0.test/v1/",
         "https://secret@mem0.test",
@@ -206,7 +207,7 @@ def test_credentials_inside_package_are_rejected(
 def test_invalid_url_does_not_create_target(
     tmp_path: Path, pi_upstream: Path, url: str
 ) -> None:
-    # Given an invalid REST endpoint.
+    # Given an invalid MCP endpoint.
     # When it is supplied to the installer.
     result = run_installer(tmp_path, pi_upstream, "--url", url)
     # Then no package is generated.
@@ -247,7 +248,7 @@ def test_settings_commit_failure_rolls_back_package_and_key(
     settings = agent_dir / "settings.json"
     settings.write_text('{"packages":["existing"]}')
     env_file = tmp_path / "key.env"
-    env_file.write_text("MEM0_OSS_API_KEY=old-fixture-key\n")
+    env_file.write_text("MEM0_OSS_MCP_TOKEN=old-fixture-key\n")
     env_file.chmod(0o600)
     original_replace = Path.replace
 
@@ -266,7 +267,7 @@ def test_settings_commit_failure_rolls_back_package_and_key(
         [
             str(INSTALLER),
             "--url",
-            "https://mem0.test",
+            "https://mem0.test/mcp",
             "--upstream-plugin-dir",
             str(pi_upstream),
             "--target-root",
@@ -286,6 +287,6 @@ def test_settings_commit_failure_rolls_back_package_and_key(
     # Then all active state is restored and failed staging/backups are removed.
     assert marker.read_text() == "active package"
     assert settings.read_text() == '{"packages":["existing"]}'
-    assert env_file.read_text() == "MEM0_OSS_API_KEY=old-fixture-key\n"
+    assert env_file.read_text() == "MEM0_OSS_MCP_TOKEN=old-fixture-key\n"
     assert stat.S_IMODE(env_file.stat().st_mode) == 0o600
     assert not list((tmp_path / "generated").glob("mem0-oss.backup.*"))
