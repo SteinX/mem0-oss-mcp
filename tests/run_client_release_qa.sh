@@ -5,7 +5,7 @@ assets=${1:?Usage: run_client_release_qa.sh ASSET_DIRECTORY VERSION}
 version=${2:?Usage: run_client_release_qa.sh ASSET_DIRECTORY VERSION}
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
-cp "$assets"/mem0-oss-{codex,opencode}-"$version".{zip,sha256} "$stage/"
+cp "$assets"/mem0-oss-{codex,opencode}-"$version".{zip,tar.gz,sha256} "$stage/"
 python3 "$repo/plugins/mem0-oss/scripts/build_client_releases.py" 9.9.9 "$stage" \
   --upstream "${CLIENT_RELEASE_UPSTREAM:-$repo/third_party/mem0}"
 if [ -z "${CLIENT_RELEASE_QA_NODE_MODULES:-}" ]; then

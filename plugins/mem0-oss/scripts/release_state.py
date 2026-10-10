@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import os
 import stat
+import tarfile
 import zipfile
 from pathlib import Path, PurePosixPath
 from typing import TypedDict
@@ -142,35 +143,61 @@ def select_package(root: Path, target: str | None) -> None:
 
 
 def extract_verified(archive: Path, directory: Path, client: str) -> str:
-    checksum = archive.with_suffix(".sha256")
+    is_tar = archive.name.endswith(".tar.gz")
+    checksum = (
+        archive.with_name(archive.name.removesuffix(".tar.gz") + ".sha256")
+        if is_tar
+        else archive.with_suffix(".sha256")
+    )
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
     expected = f"{digest}  {archive.name}"
     if not checksum.is_file() or expected not in checksum.read_text().splitlines():
         raise ReleaseError("archive checksum missing or mismatched")
-    with zipfile.ZipFile(archive) as package:
-        names: set[str] = set()
-        if sum(member.file_size for member in package.infolist()) > 100_000_000:
-            raise ReleaseError("archive exceeds release size limit")
-        for member in package.infolist():
-            path = PurePosixPath(member.filename)
-            mode = member.external_attr >> 16
-            if (
-                path.is_absolute()
-                or ".." in path.parts
-                or "\\" in member.filename
-                or not path.parts
-                or path.parts[0] != "mem0-oss"
-                or len(path.parts) < 2
-                or stat.S_ISLNK(mode)
-                or member.is_dir()
-                or member.filename in names
-            ):
-                raise ReleaseError("archive contains unsafe or duplicate resources")
-            names.add(member.filename)
-            target = directory.joinpath(*path.parts[1:])
-            target.parent.mkdir(parents=True, exist_ok=True)
-            _ = target.write_bytes(package.read(member))
+    names: set[str] = set()
+    if is_tar:
+        with tarfile.open(archive, "r:gz") as package:
+            members = package.getmembers()
+            if sum(member.size for member in members) > 100_000_000:
+                raise ReleaseError("archive exceeds release size limit")
+            for member in members:
+                if not member.isfile():
+                    raise ReleaseError("archive contains unsafe resources")
+                target = resource_path(member.name, directory, names)
+                handle = package.extractfile(member)
+                if handle is None:
+                    raise ReleaseError("archive contains unreadable resources")
+                with handle:
+                    content = handle.read()
+                target.parent.mkdir(parents=True, exist_ok=True)
+                _ = target.write_bytes(content)
+    else:
+        with zipfile.ZipFile(archive) as package:
+            if sum(member.file_size for member in package.infolist()) > 100_000_000:
+                raise ReleaseError("archive exceeds release size limit")
+            for member in package.infolist():
+                if stat.S_ISLNK(member.external_attr >> 16) or member.is_dir():
+                    raise ReleaseError("archive contains unsafe resources")
+                target = resource_path(member.filename, directory, names)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                _ = target.write_bytes(package.read(member))
     provenance = read_provenance(directory / "provenance.json")
     if provenance["client"] != client:
         raise ReleaseError("archive client does not match installation target")
     return digest
+
+
+def resource_path(name: str, directory: Path, names: set[str]) -> Path:
+    path = PurePosixPath(name)
+    normalized = path.as_posix()
+    if (
+        path.is_absolute()
+        or ".." in path.parts
+        or "\\" in name
+        or not path.parts
+        or path.parts[0] != "mem0-oss"
+        or len(path.parts) < 2
+        or normalized in names
+    ):
+        raise ReleaseError("archive contains unsafe or duplicate resources")
+    names.add(normalized)
+    return directory.joinpath(*path.parts[1:])

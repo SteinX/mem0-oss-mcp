@@ -102,7 +102,7 @@ try {
     const installRoot = join(root, "installation");
     const hostConfig = join(host, client === "codex" ? "config.toml" : "opencode.json");
     const hostConfigBefore = readFileSync(hostConfig, "utf8");
-    await run(["python3", installer, "install", "--client", client, "--root", installRoot, "--host-dir", host, "--archive", join(assets, `mem0-oss-${client}-${version}.zip`), "--url", `http://127.0.0.1:${backend.port}/mcp`, "--token-stdin"]);
+    await run(["python3", installer, "install", "--client", client, "--root", installRoot, "--host-dir", host, "--archive", join(assets, `mem0-oss-${client}-${version}.tar.gz`), "--url", `http://127.0.0.1:${backend.port}/mcp`, "--token-stdin"]);
     const config = join(installRoot, "clients", client, "connection.json");
     const secret = join(installRoot, "clients", client, "credentials.env");
     const parsed = z.record(z.string(), z.string()).parse(JSON.parse(readFileSync(config, "utf8")));

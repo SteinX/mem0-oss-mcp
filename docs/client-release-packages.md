@@ -9,6 +9,8 @@ supports Unix-like hosts (Linux, macOS and WSL).
 Download `mem0-oss-codex-<version>.zip` or `mem0-oss-opencode-<version>.zip` and its
 matching `.sha256` file. Verify the checksum before running downloaded code, then
 extract the archive. The installer verifies checksums again when importing it.
+The `.tar.gz` alternative uses the same checksum file and supports the same
+installer commands; extract it with `tar -xzf` and pass that tarball to `--archive`.
 
 ```bash
 sha256sum --check mem0-oss-codex-0.1.6.sha256 --ignore-missing
