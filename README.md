@@ -304,7 +304,9 @@ submodule and rerun `install_opencode_plugin.py`.
 
 Generate the official Pi 0.3.2+ extension with a self-hosted MCP adapter. Pi uses
 Bearer authentication against the bridge's `/mcp` endpoint. Use a bridge configured
-with the durable sidecar backend for pagination, write idempotency and events.
+with Sidecar 0.3.12 or later for pagination, write idempotency and caller-bound
+event receipts. Earlier sidecars can persist an authenticated add and then fail
+the bridge's event ownership check because the receipt lacks its channel.
 The Core REST adapter shipped in the initial Pi implementation is replaced;
 regenerate it using your MCP URL and MCP token.
 

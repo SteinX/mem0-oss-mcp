@@ -111,7 +111,7 @@ these generated defaults.
 ## Pi
 
 `scripts/install_pi_plugin.py` generates the official Pi 0.3.2+ extension with an
-MCP adapter. It uses the same bridge and durable sidecar path as other clients.
+MCP adapter. It uses the same bridge and durable Sidecar 0.3.12+ path as other clients.
 
 ```bash
 printf '%s\n' "$MEM0_OSS_MCP_TOKEN" | \
