@@ -55,3 +55,8 @@ jobs:
           bun-version: "1.2.14"
       - name: Build and exercise Pi and Senpi MCP extensions
         run: tests/run_pi_qa.sh
+      - name: Build and install release archives in Pi and Senpi
+        run: |
+          version=$(PYTHONPATH=src python -c 'from mem0_oss_mcp import __version__; print(__version__)')
+          bash plugins/mem0-oss/scripts/build_pi_release.sh "$version" "$RUNNER_TEMP/pi-assets"
+          bash tests/run_pi_release_qa.sh "$RUNNER_TEMP/pi-assets" "$version"

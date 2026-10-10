@@ -23,13 +23,15 @@ def replace_required(path: Path, before: str, after: str) -> None:
     path.write_text(content.replace(before, after), encoding="utf-8")
 
 
-def patch_runtime(plugin: Path, agent_dir: Path) -> None:
+def patch_runtime(plugin: Path, agent_dir: Path | None) -> None:
     config = plugin / "src/config/index.ts"
     replace_required(
         config,
         'process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent")',
-        f"process.env.OMO_CODING_AGENT_DIR || process.env.SENPI_CODING_AGENT_DIR || process.env.PI_CODING_AGENT_DIR || {js_literal(str(agent_dir))}",
+        f"process.env.OMO_CODING_AGENT_DIR || process.env.SENPI_CODING_AGENT_DIR || process.env.PI_CODING_AGENT_DIR || {js_literal(str(agent_dir)) if agent_dir is not None else 'getAgentDir()'}",
     )
+    if agent_dir is None:
+        config.write_text('import { getAgentDir } from "@earendil-works/pi-coding-agent";\n' + config.read_text(encoding="utf-8"), encoding="utf-8")
     replace_required(config, "autoCapture: true,", "autoCapture: false,")
     entry = plugin / "src/entry.ts"
     content = entry.read_text(encoding="utf-8")
