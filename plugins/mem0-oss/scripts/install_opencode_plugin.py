@@ -24,6 +24,7 @@ from urllib.parse import urlparse
 DEFAULT_PLUGIN_NAME = "mem0-oss"
 DEFAULT_TOKEN_ENV_VAR = "MEM0_OSS_MCP_TOKEN"
 UPSTREAM_OPENCODE_SUBDIR = "integrations/mem0-plugin/.opencode-plugin"
+UPSTREAM_OPENCODE_CURRENT_SUBDIR = "integrations/opencode-plugin"
 
 UPSTREAM_AUTO_CAPTURE_BLOCK = """    if (msgCount % 3 === 0) {
       Promise.resolve().then(async () => {
@@ -119,7 +120,7 @@ def repo_root_from_script() -> Path:
 
 
 def default_upstream_opencode_plugin_dir() -> Path:
-    return repo_root_from_script() / "third_party" / "mem0" / UPSTREAM_OPENCODE_SUBDIR
+    return repo_root_from_script() / "third_party" / "mem0"
 
 
 def default_target_root() -> Path:
@@ -139,6 +140,7 @@ def validate_upstream_opencode_plugin_dir(path: Path) -> Path:
     candidates = [
         root,
         root / ".opencode-plugin",
+        root / UPSTREAM_OPENCODE_CURRENT_SUBDIR,
         root / UPSTREAM_OPENCODE_SUBDIR,
     ]
     for candidate in candidates:
@@ -225,6 +227,24 @@ def copy_plugin(source: Path, target: Path) -> None:
     shutil.copytree(source, target, ignore=ignore)
 
 
+def copy_shared_core(source: Path, target: Path) -> None:
+    shared_import = "../agent-plugin-core/typescript/src/"
+    importing_files = [path for path in target.rglob("*.ts") if shared_import in path.read_text(encoding="utf-8")]
+    if not importing_files:
+        return
+    shared_source = source.parent / "agent-plugin-core" / "typescript" / "src"
+    if not shared_source.is_dir():
+        raise ValueError("OpenCode plugin shared agent-plugin-core TypeScript source is missing")
+    shared_target = target / "agent-plugin-core"
+    shutil.copytree(shared_source, shared_target)
+    for path in importing_files:
+        relative = Path(os.path.relpath(shared_target, path.parent)).as_posix()
+        if not relative.startswith("."):
+            relative = "./" + relative
+        content = path.read_text(encoding="utf-8").replace(shared_import, relative + "/")
+        path.write_text(content, encoding="utf-8")
+
+
 def load_json(path: Path) -> dict:
     with path.open(encoding="utf-8") as handle:
         data = json.load(handle)
@@ -251,16 +271,17 @@ def write_oss_adapter(source_root: Path, plugin_root: Path) -> None:
     adapter_root = source_root / "scripts" / "oss_adapter"
     copy_adapter_file(adapter_root / "mem0_oss_memory_client.ts", plugin_root / "mem0_oss_memory_client.ts")
     copy_adapter_file(adapter_root / "opencode_capture_policy.ts", plugin_root / "opencode_capture_policy.ts")
+    copy_adapter_file(adapter_root / "opencode_release_config.ts", plugin_root / "opencode_release_config.ts")
 
 
-def update_package_json(plugin_root: Path, plugin_name: str, display_name: str) -> None:
+def update_package_json(plugin_root: Path, plugin_name: str, display_name: str, *, portable: bool = False) -> None:
     package_path = plugin_root / "package.json"
     package = load_json(package_path)
     base_version = str(package.get("version", "0.1.5")).split("+", 1)[0]
     cachebuster = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
 
     package["name"] = f"@mem0-oss/{plugin_name}-opencode-plugin"
-    package["version"] = f"{base_version}+oss.{cachebuster}"
+    package["version"] = f"{base_version}+oss" if portable else f"{base_version}+oss.{cachebuster}"
     package["private"] = True
     package["description"] = f"{display_name} OpenCode plugin for a self-hosted Mem0 OSS MCP bridge"
     dependencies = package.get("dependencies")
@@ -277,11 +298,13 @@ def js_literal(value: str | None) -> str:
 
 def patch_opencode_source(
     plugin_root: Path,
-    url: str,
+    url: str | None,
     token_env_var: str,
     env_file: Path | None,
     auto_capture_mode: str,
     client_dream: bool,
+    *,
+    portable: bool = False,
 ) -> None:
     source_path = plugin_root / "opencode-mem0.ts"
     content = source_path.read_text(encoding="utf-8")
@@ -304,25 +327,46 @@ def patch_opencode_source(
     if anchor not in content:
         raise ValueError("OpenCode plugin source did not contain the expected ctx destructuring anchor")
     env_file_value = str(env_file) if env_file is not None else None
-    init = (
-        anchor
-        + "  initializeMem0OssEnv({\n"
-        + f"    url: {js_literal(url)},\n"
+    connection_options = "" if portable else (
+        f"    url: {js_literal(url)},\n"
         + f"    tokenEnvVar: {js_literal(token_env_var)},\n"
         + f"    envFile: {js_literal(env_file_value)},\n"
-        + f"    autoCaptureMode: {js_literal(auto_capture_mode)},\n"
+    )
+    init = anchor + "  initializeMem0OssEnv({\n" + connection_options + (
+        f"    autoCaptureMode: {js_literal(auto_capture_mode)},\n"
         + f"    clientDream: {str(client_dream).lower()},\n"
         + "  });\n"
     )
     content = content.replace(anchor, init, 1)
 
+    if portable:
+        content = content.replace(
+            'import {MemoryClient, initializeMem0OssEnv} from "./mem0_oss_memory_client";',
+            'import {MemoryClient} from "./mem0_oss_memory_client";\n'
+            'import {initializeMem0OssEnv} from "./opencode_release_config";',
+            1,
+        )
+        content = re.sub(r'^import\s*\{\s*resolveApiKey\s*\}\s*from\s*["\']\./api-key["\'];\n', "", content, flags=re.MULTILINE)
+        content = re.sub(r"const apiKey = resolveApiKey\([^;]+\);", "const apiKey = process.env.MEM0_API_KEY;", content, count=1)
+        content = re.sub(
+            r"  Promise\.resolve\(\)\.then\(\(\) => autoSetupCategories\(mem0, apiKey\)\)\.catch\(\(\) => \{\s*\}\);\n",
+            "",
+            content,
+            count=1,
+        )
+
     state_anchor = '  const mem0StateDir = join(homedir(), ".mem0");\n'
+    state_expression = "mem0StateDir"
     if state_anchor not in content:
-        raise ValueError("OpenCode plugin source did not contain the expected mem0 state directory anchor")
+        session_anchor = re.search(r"^  const sessionId = [^\n]+;\n", content, flags=re.MULTILINE)
+        if session_anchor is None:
+            raise ValueError("OpenCode plugin source did not contain the expected session identity anchor")
+        state_anchor = session_anchor.group()
+        state_expression = 'join(homedir(), ".mem0")'
     content = content.replace(
         state_anchor,
         state_anchor
-        + "  const capturePolicy = CapturePolicy.fromEnv(process.env, mem0StateDir, appId, sessionId);\n",
+        + f"  const capturePolicy = CapturePolicy.fromEnv(process.env, {state_expression}, appId, sessionId);\n",
         1,
     )
 
@@ -369,9 +413,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--url",
-        required=True,
-        help="Absolute bridge endpoint, for example https://mem0.example.com/mcp",
+        help="Absolute bridge endpoint; required unless --portable",
     )
+    parser.add_argument("--portable", action="store_true", help="Generate a distributable package configured at runtime")
     parser.add_argument("--name", default=DEFAULT_PLUGIN_NAME, help="Generated plugin id, default: mem0-oss")
     parser.add_argument("--display-name", help="Display name used in generated package metadata")
     parser.add_argument("--token-env-var", default=DEFAULT_TOKEN_ENV_VAR, help="Bearer token env var name")
@@ -395,7 +439,7 @@ def parse_args() -> argparse.Namespace:
         "--upstream-plugin-dir",
         type=Path,
         default=default_upstream_opencode_plugin_dir(),
-        help="Official .opencode-plugin directory, or a mem0 checkout containing integrations/mem0-plugin/.opencode-plugin",
+        help="Official OpenCode plugin directory, or a mem0 checkout containing integrations/opencode-plugin",
     )
     parser.add_argument(
         "--env-file",
@@ -430,8 +474,12 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    if args.portable and (args.url is not None or args.token is not None or args.token_stdin or args.env_file is not None or args.install):
+        raise ValueError("portable packages cannot include connection credentials, an endpoint or installation settings")
+    if not args.portable and args.url is None:
+        raise ValueError("--url is required unless --portable")
     plugin_name = normalize_name(args.name)
-    url = validate_url(args.url)
+    url = validate_url(args.url) if args.url is not None else None
     token_env_var = validate_env_var(args.token_env_var)
     token = read_token_from_args(args)
     display_name = args.display_name or " ".join(part.capitalize() for part in plugin_name.split("-"))
@@ -445,6 +493,7 @@ def main() -> int:
     validate_env_file(env_file, allow_missing=token is not None)
 
     copy_plugin(source_root, target_root)
+    copy_shared_core(source_root, target_root)
     write_oss_adapter(local_source_root, target_root)
     if token is not None:
         assert env_file is not None
@@ -456,8 +505,9 @@ def main() -> int:
         env_file,
         args.auto_capture_mode,
         args.client_dream,
+        portable=args.portable,
     )
-    update_package_json(target_root, plugin_name, display_name)
+    update_package_json(target_root, plugin_name, display_name, portable=args.portable)
 
     if not args.no_build:
         build_plugin(target_root)
@@ -468,8 +518,11 @@ def main() -> int:
 
     print(f"Generated OpenCode plugin: {target_root}")
     print(f"Source: {source_root}")
-    print(f"MCP URL: {url}")
-    print(f"Token env var: {token_env_var}")
+    if args.portable:
+        print("Connection: external runtime JSON config")
+    else:
+        print(f"MCP URL: {url}")
+        print(f"Token env var: {token_env_var}")
     print(f"Auto capture: {args.auto_capture_mode}")
     print(f"Client Dream: {'enabled' if args.client_dream else 'disabled'}")
     if env_file is not None:
@@ -480,7 +533,7 @@ def main() -> int:
         print(f"Built entry: {target_root / 'dist' / 'index.js'}")
     if loader_path is not None:
         print(f"Installed OpenCode loader: {loader_path}")
-    else:
+    elif not args.portable:
         print()
         print("Install after building with:")
         print(f"  mkdir -p {opencode_dir / 'plugins'}")

@@ -151,6 +151,12 @@ reverse proxy or gateway.
 
 ## Codex plugin
 
+Releases include a complete prebuilt Codex package with the native runtime,
+skills, hooks and OSS MCP bridge. Install, update and roll back with the bundled
+`install.py`; connection configuration and credentials stay outside versioned
+packages. See [release installation and updates](docs/client-release-packages.md).
+The source generators below remain available for custom builds.
+
 The full-experience generator supports the current official
 `integrations/codex-plugin` shared-runtime layout and the earlier
 `integrations/mem0-plugin` layout. It pins its upstream submodule to Mem0
@@ -256,6 +262,11 @@ printf '%s\n' "$MEM0_HOME_MCP_TOKEN" | \
 
 ## OpenCode plugin
 
+Releases include a compiled OpenCode package with bundled dependencies and native
+tools, hooks and skills. The same `install.py` entry point handles installation,
+updates and rollback while preserving external connection configuration and keys.
+See [release installation and updates](docs/client-release-packages.md).
+
 OpenCode's official Mem0 plugin is a native TypeScript plugin rather than an
 MCP-only config. To use that full plugin experience with Mem0 OSS, generate a
 local OpenCode plugin copy from the official Mem0 submodule and overlay the OSS
@@ -307,8 +318,8 @@ attachments. Extract a package into a persistent directory and run
 `pi install /path/to/mem0-oss`. Set your MCP endpoint and credentials at runtime;
 no local build or upstream checkout is required. See
 [archive installation](docs/pi-release-package.md) for Pi and Senpi configuration.
-The `Publish Pi plugin archives` workflow builds, installs and tests the extracted
-package before uploading it. Manual dispatch can add attachments to an existing
+The `Publish client plugin archives` workflow builds, installs and tests the extracted
+Pi, Codex and OpenCode packages before uploading them. Manual dispatch can add attachments to an existing
 release; `provenance.json` records the generator commit used for that build.
 
 Generate the official Pi 0.3.2+ extension with a self-hosted MCP adapter. Pi uses
