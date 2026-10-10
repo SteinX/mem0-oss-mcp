@@ -155,7 +155,10 @@ export default class PiMemoryClient {
           }
         }
       } catch (error) {
-        if (error instanceof Error) throw new Mem0McpError(`Bulk delete stopped; ${deleted} deletions confirmed.`, { cause: error });
+        if (error instanceof Error) {
+          const reason = error instanceof Mem0McpError ? ` ${error.reason}` : "";
+          throw new Mem0McpError(`Bulk delete stopped; ${deleted} deletions confirmed.${reason}`, { cause: error });
+        }
         throw error;
       }
       return { message: `Deleted ${deleted} matching indexed memories from the selected scope.`, deletedCount: deleted };

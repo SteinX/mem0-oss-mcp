@@ -53,6 +53,10 @@ export class PiMcpTransport {
     const { error, result } = parsed.data;
     const text = result?.content.find(part => part.type === "text")?.text;
     if (name === "get_memories" && result?.isError) {
+      if (text === "Cursor listing requires Sidecar 0.3.13+"
+        || text === "Cursor listing requires a sidecar-backed MCP bridge") {
+        throw new Mem0McpError("Cursor listing requires mem0-oss-mcp 0.1.6+ with Sidecar 0.3.13+; upgrade Sidecar, then the bridge");
+      }
       const status = /^backend error (\d{3}):/.exec(text ?? "")?.[1];
       if (status === "409") throw new Mem0McpError("Mem0 cursor scan conflicted; restart without a cursor (HTTP 409)");
       if (status === "404" || status === "422") {

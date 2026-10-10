@@ -10,6 +10,7 @@ const calls: { name: string; args: Record<string, unknown> }[] = [];
 let repeatPage = false;
 let reject = false;
 let legacy = false;
+let toolError: string | undefined;
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -24,6 +25,11 @@ const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) 
   assert(typeof params["name"] === "string" && record(params["arguments"]));
   const name = params["name"], args = params["arguments"];
   calls.push({ name, args });
+  if (name === "get_memories" && toolError) {
+    return Response.json({ jsonrpc: "2.0", id: rpc["id"], result: {
+      isError: true, content: [{ type: "text", text: toolError }],
+    } });
+  }
   let result: unknown;
   switch (name) {
     case "get_memories": {
@@ -108,6 +114,16 @@ try {
   await assert.rejects(client.getAll({ filters: scope }), /0\.1\.6.*0\.3\.13/);
   assert.equal(calls.length, 1);
   legacy = false;
+  toolError = "Cursor listing requires Sidecar 0.3.13+";
+  calls.length = 0;
+  await assert.rejects(client.getAll({ filters: scope }), /0\.1\.6.*0\.3\.13/);
+  await assert.rejects(client.deleteAll({ userId: scope.user_id, appId: scope.app_id,
+    filters: { type: "decision" } }), error => error instanceof Error
+    && /0 deletions confirmed/.test(error.message) && /0\.1\.6.*0\.3\.13/.test(error.message));
+  assert(calls.every(call => call.name === "get_memories"));
+  toolError = "private backend detail fixture-token";
+  await assert.rejects(client.getAll({ filters: scope }), { message: "Mem0 OSS MCP tool get_memories failed" });
+  toolError = undefined;
   const cancelled = new AbortController(); cancelled.abort();
   calls.length = 0;
   await assert.rejects(client.getAll({ filters: scope, signal: cancelled.signal }), /abort|cancel/i);
