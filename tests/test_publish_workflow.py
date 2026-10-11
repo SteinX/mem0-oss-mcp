@@ -55,7 +55,7 @@ def test_publisher_pushes_immutable_tags_before_promotion(
 
 def test_release_and_manual_tag_source_settings() -> None:
     workflow = WORKFLOW.read_text()
-    assert "types: [published]" in workflow
+    assert "workflow_call:" in workflow
     assert "github.ref_type == 'tag' && github.ref_name" in workflow
     assert (
         "github.event_name == 'release' && !github.event.release.prerelease" in workflow

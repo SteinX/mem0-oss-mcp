@@ -1,4 +1,4 @@
-name: Publish client plugin archives
+name: Publish MCP release
 
 on:
   release:
@@ -79,3 +79,11 @@ jobs:
         run: |
           gh release upload "$RELEASE_TAG" "$RUNNER_TEMP/client-assets/"* \
             --repo "$GITHUB_REPOSITORY" --clobber
+
+  image:
+    needs: publish
+    if: github.event_name == 'release' && !github.event.release.prerelease
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/publish-ghcr.yml
