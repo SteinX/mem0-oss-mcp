@@ -1,6 +1,7 @@
 name: Publish GHCR image
 
 on:
+  workflow_call:
   workflow_dispatch:
     inputs:
       push_latest:
@@ -8,8 +9,6 @@ on:
         required: false
         default: false
         type: boolean
-  release:
-    types: [published]
 
 permissions:
   contents: read

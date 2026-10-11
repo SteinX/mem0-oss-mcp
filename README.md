@@ -20,14 +20,19 @@ Memory operations continue forwarding the original caller attribution.
 
 ## Publishing the container image
 
-Publishing a GitHub Release automatically runs `Publish GHCR image` and builds
-its exact tagged commit. `ghcr.io/steinx/mem0-oss-mcp` receives the Release tag
-and full commit SHA as image tags. Stable releases also update `latest`;
-prereleases do not. Draft releases and Git tag pushes alone do not publish.
+Publishing a stable GitHub Release runs `Publish MCP release`. After testing
+and uploading all client archives, it calls `Publish GHCR image` to build the
+exact tagged commit. `ghcr.io/steinx/mem0-oss-mcp` receives the Release tag and
+full commit SHA as image tags. Drafts, prereleases, main pushes, pull requests,
+and manual client archive backfills do not automatically publish images.
 Image publications share a queue, and automatic builds update `latest` only
 while their tag is still GitHub's latest stable Release after immutable tags
 are pushed, immediately before promotion. A delayed older build
 preserves the newer alias.
+
+Client archive failures block image publication; rerun the failed release jobs
+after resolving the failure. Pin a release tag or digest for deployment;
+publishing an image does not restart the MCP service.
 
 For release tags containing this workflow update, retry publication without
 recreating the Release by manually dispatching the workflow from that tag:
@@ -318,7 +323,7 @@ attachments. Extract a package into a persistent directory and run
 `pi install /path/to/mem0-oss`. Set your MCP endpoint and credentials at runtime;
 no local build or upstream checkout is required. See
 [archive installation](docs/pi-release-package.md) for Pi and Senpi configuration.
-The `Publish client plugin archives` workflow builds, installs and tests the extracted
+The `Publish MCP release` workflow builds, installs and tests the extracted
 Pi, Codex and OpenCode packages before uploading them. Manual dispatch can add attachments to an existing
 release; `provenance.json` records the generator commit used for that build.
 
