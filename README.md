@@ -142,6 +142,12 @@ default target is 5000. Older Mem0 OSS builds may reject list requests above
 When the fetched backend window is full, responses include `truncated: true` and
 `complete: false`; consolidation tools should not treat that listing as complete.
 
+`search_memories` accepts optional boolean `rerank` and `explain` controls.
+Explicit `true` and `false` pass through to OSS or Sidecar; omitting either
+keeps the backend default. Configure a reranker on the backend to enable
+reranking. Returned `rerank_score` and `score_details` remain available after
+the bridge removes expired candidates and trims results to the requested `top_k`.
+
 Codex should connect to this bridge, not directly to Mem0 OSS:
 
 ```toml
