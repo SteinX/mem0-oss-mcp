@@ -646,9 +646,14 @@ def search_memories(args: JSON) -> Any:
     if top_k is not None:
         requested_top_k = int(top_k)
         body["top_k"] = _search_fetch_limit(requested_top_k)
-    for key in ("threshold", "explain"):
-        if key in args and args[key] is not None:
-            body[key] = args[key]
+    if args.get("threshold") is not None:
+        body["threshold"] = args["threshold"]
+    for key in ("rerank", "explain"):
+        if key in args:
+            value = args[key]
+            if type(value) is not bool:
+                raise TypeError(f"search_memories {key} must be a boolean")
+            body[key] = value
 
     for key in ("user_id", "agent_id", "run_id", "app_id"):
         if args.get(key):
@@ -1143,6 +1148,8 @@ def tool_schema() -> list[JSON]:
                     "query": {"type": "string"},
                     "top_k": {"type": "integer"},
                     "threshold": {"type": "number"},
+                    "rerank": {"type": "boolean"},
+                    "explain": {"type": "boolean"},
                     **common,
                 },
                 ["query"],
