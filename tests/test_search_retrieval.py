@@ -178,11 +178,13 @@ def test_sidecar_history_and_event_controls_survive_http(retrieval_backend):
         result = server.search_memories({
             "query": "version", "app_id": "fixture-app", "top_k": 100,
             "current_only": False, "event_from": "2020-01-01", "event_to": "2020-12-31",
+            "latest_only": True,
         })
     assert result["results"][0]["id"] == "current"
     body = requests[0]["body"]
     assert body["top_k"] == 200
     assert body["current_only"] is False
+    assert body["latest_only"] is True
     assert body["event_from"] == "2020-01-01" and body["event_to"] == "2020-12-31"
 
 

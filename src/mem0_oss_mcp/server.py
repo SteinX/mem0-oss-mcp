@@ -648,7 +648,7 @@ def search_memories(args: JSON) -> Any:
         body["top_k"] = _search_fetch_limit(requested_top_k)
     if args.get("threshold") is not None:
         body["threshold"] = args["threshold"]
-    for key in ("rerank", "explain", "current_only"):
+    for key in ("rerank", "explain", "latest_only", "current_only"):
         if key in args:
             value = args[key]
             if type(value) is not bool:
@@ -1163,6 +1163,7 @@ def tool_schema() -> list[JSON]:
                     "top_k": {"type": "integer"},
                     "threshold": {"type": "number"},
                     "rerank": {"type": "boolean"},
+                    "latest_only": {"type": "boolean", "description": "Exclude memories explicitly marked superseded; does not infer fact recency."},
                     "explain": {"type": "boolean"},
                     "current_only": {"type": "boolean"},
                     "event_from": {"type": "string", "format": "date"},

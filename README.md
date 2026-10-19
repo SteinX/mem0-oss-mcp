@@ -142,11 +142,28 @@ default target is 5000. Older Mem0 OSS builds may reject list requests above
 When the fetched backend window is full, responses include `truncated: true` and
 `complete: false`; consolidation tools should not treat that listing as complete.
 
-`search_memories` accepts optional boolean `rerank` and `explain` controls.
-Explicit `true` and `false` pass through to OSS or Sidecar; omitting either
+`search_memories` accepts optional boolean `rerank`, `explain`, and `latest_only` controls.
+Explicit `true` and `false` pass through to OSS or Sidecar; omitting an option
 keeps the backend default. Configure a reranker on the backend to enable
 reranking. Returned `rerank_score` and `score_details` remain available after
 the bridge removes expired candidates and trims results to the requested `top_k`.
+`latest_only: true` requires a matching Core server and excludes memories with
+an explicit non-empty `metadata.superseded_by` marker before ranking. It does not
+infer which fact is current from timestamps; `false` keeps history available.
+Older Core builds may silently ignore unsupported fields, so update the bridge
+and backend together when using this option.
+
+The optional cross-repository regression runs a generated Codex plugin through
+the bridge, Sidecar, and Core REST routes using temporary databases and fake
+provider data. With both checkouts and their test dependencies available, run:
+
+```bash
+MEM0_COMPAT_CORE_ROOT=/path/to/mem0 \
+MEM0_COMPAT_SIDECAR_ROOT=/path/to/mem0-platform-sidecar \
+python -m pytest -q tests/test_codex_recall_stack.py
+```
+
+It leaves installed plugins, production services, and remote memories untouched.
 
 With a Sidecar backend, search also accepts boolean `current_only` (default true)
 and inclusive `event_from`/`event_to` dates (`YYYY-MM-DD`). Set `current_only: false`
@@ -158,6 +175,8 @@ enabled ranking/event policy accepts requested limits through 200. Project
 ranking policies are configured through the Sidecar operator API. Scores and
 ranking details survive bridge filtering. Event filtering covers the bounded
 candidate pool and does not guarantee a complete collection scan.
+`current_only` controls Sidecar consolidation states; `latest_only` independently
+controls explicit Core `superseded_by` metadata. Both can be supplied together.
 
 Codex should connect to this bridge, not directly to Mem0 OSS:
 
