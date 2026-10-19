@@ -57,7 +57,7 @@ def retrieval_backend() -> Iterator[tuple[str, list[JsonObject]]]:
             thread.join(timeout=5)
 
 
-@pytest.mark.parametrize("name", ["rerank", "explain"])
+@pytest.mark.parametrize("name", ["rerank", "explain", "current_only"])
 def test_search_schema_advertises_optional_boolean_controls(name: str) -> None:
     # Given the public MCP tools list, when a client inspects search options.
     schema = next(
@@ -154,7 +154,7 @@ def test_search_controls_and_scores_survive_http_routing(
     }
 
 
-@pytest.mark.parametrize("name", ["rerank", "explain"])
+@pytest.mark.parametrize("name", ["rerank", "explain", "current_only"])
 @pytest.mark.parametrize("value", [None, 0, 1, "false", "true", [], {}])
 def test_search_rejects_non_boolean_controls_before_backend(
     name: str,
@@ -167,3 +167,42 @@ def test_search_rejects_non_boolean_controls_before_backend(
         # When search receives a non-boolean control, then it rejects the input.
         with pytest.raises(TypeError, match=f"{name} must be a boolean"):
             server.search_memories({"query": "HTTP 502", name: value})
+
+
+def test_sidecar_history_and_event_controls_survive_http(retrieval_backend):
+    base_url, requests = retrieval_backend
+    with (
+        patch.object(server.Config, "sidecar_base_url", base_url),
+        patch.object(server.Config, "sidecar_project_id", "fixture-project"),
+    ):
+        result = server.search_memories({
+            "query": "version", "app_id": "fixture-app", "top_k": 100,
+            "current_only": False, "event_from": "2020-01-01", "event_to": "2020-12-31",
+            "latest_only": True,
+        })
+    assert result["results"][0]["id"] == "current"
+    body = requests[0]["body"]
+    assert body["top_k"] == 200
+    assert body["current_only"] is False
+    assert body["latest_only"] is True
+    assert body["event_from"] == "2020-01-01" and body["event_to"] == "2020-12-31"
+
+
+@pytest.mark.parametrize("controls", [
+    {"current_only": False}, {"event_from": "2020-01-01"},
+])
+def test_sidecar_controls_are_rejected_in_direct_core_mode(controls):
+    with patch.object(server.Config, "sidecar_base_url", ""):
+        with pytest.raises(ValueError, match="sidecar-backed"):
+            server.search_memories({"query": "version", **controls})
+
+
+@pytest.mark.parametrize("controls", [
+    {"event_from": "2020-02-30"}, {"event_from": None},
+    {"event_to": 20200101}, {"event_to": "20200101"},
+    {"event_from": "2026-01-01", "event_to": "2020-01-01"},
+])
+def test_invalid_event_dates_are_rejected_before_routing(controls):
+    with patch.object(server, "_uses_sidecar", side_effect=AssertionError("routed")):
+        with pytest.raises(ValueError):
+            server.search_memories({"query": "version", **controls})

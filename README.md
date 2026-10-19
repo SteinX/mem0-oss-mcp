@@ -165,6 +165,19 @@ python -m pytest -q tests/test_codex_recall_stack.py
 
 It leaves installed plugins, production services, and remote memories untouched.
 
+With a Sidecar backend, search also accepts boolean `current_only` (default true)
+and inclusive `event_from`/`event_to` dates (`YYYY-MM-DD`). Set `current_only: false`
+to retrieve retained merged/superseded sources. Event windows use explicit
+`metadata.event_date`, not creation/import dates. These options require the P1
+Sidecar companion and are rejected in direct OSS mode. Sidecar search overfetch
+is capped at 200 candidates (or the explicitly requested limit if larger); an
+enabled ranking/event policy accepts requested limits through 200. Project
+ranking policies are configured through the Sidecar operator API. Scores and
+ranking details survive bridge filtering. Event filtering covers the bounded
+candidate pool and does not guarantee a complete collection scan.
+`current_only` controls Sidecar consolidation states; `latest_only` independently
+controls explicit Core `superseded_by` metadata. Both can be supplied together.
+
 Codex should connect to this bridge, not directly to Mem0 OSS:
 
 ```toml

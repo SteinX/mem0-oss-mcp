@@ -648,18 +648,30 @@ def search_memories(args: JSON) -> Any:
         body["top_k"] = _search_fetch_limit(requested_top_k)
     if args.get("threshold") is not None:
         body["threshold"] = args["threshold"]
-    for key in ("rerank", "explain", "latest_only"):
+    for key in ("rerank", "explain", "latest_only", "current_only"):
         if key in args:
             value = args[key]
             if type(value) is not bool:
                 raise TypeError(f"search_memories {key} must be a boolean")
             body[key] = value
+    for key in ("event_from", "event_to"):
+        if key in args:
+            value = args[key]
+            if not isinstance(value, str) or date.fromisoformat(value).isoformat() != value:
+                raise ValueError(f"search_memories {key} must use YYYY-MM-DD")
+            body[key] = value
+    if body.get("event_from") and body.get("event_to") and (
+        body["event_from"] > body["event_to"]
+    ):
+        raise ValueError("event_from must not be later than event_to")
 
     for key in ("user_id", "agent_id", "run_id", "app_id"):
         if args.get(key):
             body["filters"].setdefault(key, args[key])
 
     if _uses_sidecar():
+        if requested_top_k is not None:
+            body["top_k"] = max(requested_top_k, min(body["top_k"], 200))
         app_id = _sidecar_search_app_id(args, body["filters"])
         result = _sidecar_backend(
             "POST",
@@ -671,6 +683,8 @@ def search_memories(args: JSON) -> Any:
             },
         )
     else:
+        if any(key in body for key in ("current_only", "event_from", "event_to")):
+            raise ValueError("Current-fact and event controls require a sidecar-backed MCP bridge")
         result = _backend("POST", "/search", body)
     result = _without_expired(result)
     return _limit_result_count(result, requested_top_k)
@@ -1151,6 +1165,9 @@ def tool_schema() -> list[JSON]:
                     "rerank": {"type": "boolean"},
                     "latest_only": {"type": "boolean", "description": "Exclude memories explicitly marked superseded; does not infer fact recency."},
                     "explain": {"type": "boolean"},
+                    "current_only": {"type": "boolean"},
+                    "event_from": {"type": "string", "format": "date"},
+                    "event_to": {"type": "string", "format": "date"},
                     **common,
                 },
                 ["query"],
