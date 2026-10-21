@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -31,6 +33,71 @@ from release_config import validate_endpoint
 def outside_package(path: Path, package: Path, label: str) -> None:
     if path == package or package in path.parents:
         raise ValueError(f"{label} must be outside the generated package")
+
+
+def restore_credential(path: Path, previous: tuple[bytes, int] | None) -> None:
+    if previous is None:
+        path.unlink(missing_ok=True)
+        return
+    content, mode = previous
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+    try:
+        os.fchmod(descriptor, mode)
+        with os.fdopen(descriptor, "wb") as handle:
+            descriptor = -1
+            handle.write(content)
+    finally:
+        if descriptor != -1:
+            os.close(descriptor)
+
+
+def promote_plugin(
+    staging: Path,
+    target: Path,
+    backup: Path,
+    *,
+    env_file: Path | None,
+    token_env_var: str,
+    token: str | None,
+) -> None:
+    previous_credential = None
+    if token is not None and env_file is not None and env_file.exists():
+        previous_credential = (
+            env_file.read_bytes(),
+            stat.S_IMODE(env_file.stat().st_mode),
+        )
+    credential_started = False
+    package_moved = False
+    try:
+        if token is not None:
+            assert env_file is not None
+            credential_started = True
+            write_token_env_file(env_file, token_env_var, token)
+        if target.exists():
+            target.rename(backup)
+            package_moved = True
+        staging.rename(target)
+    except (OSError, ValueError) as error:
+        rollback_errors = []
+        if credential_started:
+            try:
+                assert env_file is not None
+                restore_credential(env_file, previous_credential)
+            except OSError:
+                rollback_errors.append("credential restoration failed")
+        if package_moved:
+            try:
+                backup.rename(target)
+            except OSError:
+                rollback_errors.append(f"previous package preserved at {backup}")
+        if rollback_errors:
+            raise OSError(
+                "plugin update failed; " + "; ".join(rollback_errors)
+            ) from error
+        raise
+    else:
+        if package_moved:
+            shutil.rmtree(backup, ignore_errors=True)
 
 
 def main() -> int:
@@ -144,18 +211,17 @@ def main() -> int:
         staging = Path(directory) / "plugin"
         generate(source, staging, target, name, config)
         # Validate and build everything before replacing a working plugin or key.
-        if token is not None:
-            assert env_file is not None
-            write_token_env_file(env_file, token_var, token)
-        backup = Path(directory) / "previous"
-        if target.exists():
-            target.rename(backup)
-        try:
-            staging.rename(target)
-        except OSError:
-            if backup.exists():
-                backup.rename(target)
-            raise
+        # Keep the old package outside temporary cleanup if restoration itself
+        # fails, so an unsuccessful update cannot silently delete its backup.
+        backup = base / f".{name}-previous-{Path(directory).name}"
+        promote_plugin(
+            staging,
+            target,
+            backup,
+            env_file=env_file,
+            token_env_var=token_var,
+            token=token,
+        )
     print(f"Generated Devin plugin: {target}")
     if args.install:
         subprocess.run(

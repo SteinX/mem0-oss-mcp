@@ -78,6 +78,10 @@ available. Devin links local plugins to their source directory. Regenerate at th
 same path with the same options to update it, then restart Devin. Existing local
 evidence and the default private credential file survive regeneration. A changed
 upstream runtime contract fails generation before replacing the working plugin.
+Promotion and credential-write failures restore the previous package and the
+credential file's exact contents and mode, or remove a newly created credential.
+If the filesystem also prevents package restoration, its backup is retained and
+the installer reports its location instead of removing it during temporary cleanup.
 For a custom env file, repeat `--env-file` when regenerating.
 
 ## Behavior

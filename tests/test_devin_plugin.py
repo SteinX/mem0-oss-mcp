@@ -808,6 +808,71 @@ def test_regeneration_preserves_evidence_and_refuses_unowned_directory(
     assert (plugin / "hooks.json").is_file()
 
 
+@pytest.mark.parametrize(
+    "failure", ["move-old", "promote", "write-token", "new-token", "restore-old"]
+)
+def test_failed_promotion_restores_or_preserves_package_and_credential(
+    tmp_path, monkeypatch, failure
+):
+    monkeypatch.syspath_prepend(str(INSTALLER.parent))
+    import install_devin_plugin as installer
+
+    target = tmp_path / "plugin"
+    staging = tmp_path / "staging/plugin"
+    backup = tmp_path / "previous"
+    target.mkdir()
+    staging.mkdir(parents=True)
+    (target / "version").write_text("previous")
+    (staging / "version").write_text("next")
+    credential = tmp_path / "credential.env"
+    previous = b"MEM0_DEVIN_TEST_TOKEN=previous-token\nOTHER_SETTING=keep\n"
+    if failure != "new-token":
+        credential.write_bytes(previous)
+        credential.chmod(0o640)
+    original_rename = Path.rename
+
+    def rename(path, destination):
+        if (
+            (failure == "move-old" and path == target)
+            or (failure in {"promote", "new-token", "restore-old"} and path == staging)
+            or (failure == "restore-old" and path == backup)
+        ):
+            raise PermissionError("injected promotion failure")
+        return original_rename(path, destination)
+
+    def partial_write(path, *_args):
+        path.write_text("partially-written-secret")
+        path.chmod(0o600)
+        raise OSError("injected credential write failure")
+
+    monkeypatch.setattr(Path, "rename", rename)
+    if failure == "write-token":
+        monkeypatch.setattr(installer, "write_token_env_file", partial_write)
+    with pytest.raises(
+        OSError, match="preserved at" if failure == "restore-old" else "injected"
+    ):
+        installer.promote_plugin(
+            staging,
+            target,
+            backup,
+            env_file=credential,
+            token_env_var=TOKEN_VAR,
+            token="next-token",
+        )
+    assert (staging / "version").read_text() == "next"
+    if failure == "restore-old":
+        assert (backup / "version").read_text() == "previous"
+        assert not target.exists()
+    else:
+        assert (target / "version").read_text() == "previous"
+        assert not backup.exists()
+    if failure == "new-token":
+        assert not credential.exists()
+    else:
+        assert credential.read_bytes() == previous
+        assert stat.S_IMODE(credential.stat().st_mode) == 0o640
+
+
 def test_install_calls_only_devin_local_plugin_registration(tmp_path, monkeypatch):
     commands = tmp_path / "bin"
     commands.mkdir()
