@@ -75,6 +75,18 @@ def generate(
     )
     replace_once(
         staging / "core/memory_core.py",
+        'def _plugin_option(name: str, fallback: str = "") -> str:\n',
+        'def _plugin_option(name: str, fallback: str = "") -> str:\n'
+        '    if name == "user_id" and mem0_oss_bootstrap.CONFIG.get("user_id"):\n'
+        '        return mem0_oss_bootstrap.CONFIG["user_id"]\n',
+    )
+    # Native host options can belong to another installed Mem0 integration.
+    # This client reads its selected OSS credential directly and must not cache
+    # unrelated Platform credentials in its local evidence directory.
+    replace_once(staging / "core/hook_runner.py", "    cache_plugin_api_key,\n", "")
+    replace_once(staging / "core/hook_runner.py", "    cache_plugin_api_key()\n", "")
+    replace_once(
+        staging / "core/memory_core.py",
         '    """Run remote extraction at a durable boundary."""\n    return flush_session(store, hook_input, reason)',
         '    """Run remote extraction at a durable boundary."""\n'
         "    if store.is_paused() or not mem0_oss_bootstrap.capture_enabled():\n"

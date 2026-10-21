@@ -470,6 +470,30 @@ def test_missing_selected_credential_never_uses_hosted_or_cached_keys(
     assert "hosted" not in json.dumps(response)
 
 
+def test_host_options_do_not_override_explicit_identity_or_create_key_cache(
+    tmp_path, workspace, backend
+):
+    url, calls, _ = backend
+    plugin, _ = generate(tmp_path, url)
+    environment = clean_environment()
+    environment.update(
+        MEM0_API_KEY="hosted-process-key",
+        PLUGIN_OPTION_API_KEY="host-option-key",
+        CLAUDE_PLUGIN_OPTION_API_KEY="claude-host-option-key",
+        PLUGIN_OPTION_USER_ID="other-host-user",
+        CLAUDE_PLUGIN_OPTION_USER_ID="another-host-user",
+    )
+    hook(plugin, workspace, "session-start", env=environment)
+    status = cli(plugin, workspace, "status", "--json", env=environment)
+    assert status.returncode == 0, status.stderr
+    assert json.loads(status.stdout)["user_id"] == "devin-user"
+    assert not (plugin.parent / "data/mem0-oss/api-key").exists()
+    doctor = cli(plugin, workspace, "doctor", "--json", env=environment)
+    assert doctor.returncode == 0, doctor.stdout + doctor.stderr
+    assert calls[-1][1]["filters"]["user_id"] == "devin-user"
+    assert not (plugin.parent / "data/mem0-oss/api-key").exists()
+
+
 def test_disabled_capture_keeps_pending_work_local_even_in_worker(
     tmp_path, workspace, backend
 ):

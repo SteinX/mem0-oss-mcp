@@ -63,7 +63,9 @@ Without either a token input or an env file, the selected variable must be in
 Devin's process environment. Only that selected variable is read: missing OSS
 credentials never fall back to a hosted `MEM0_API_KEY`, another client's default
 token, host plugin options, or the upstream API-key cache. Sidecar operator keys
-and settings belong on the bridge, not in this client.
+and settings belong on the bridge, not in this client. Hooks do not cache host
+Platform credentials. An explicit `--user-id` takes precedence over inherited
+generic plugin user options for both memory operations and diagnostics.
 
 Keep the generated directory and the Python interpreter used to generate it
 available. Devin links local plugins to their source directory. Regenerate at the
