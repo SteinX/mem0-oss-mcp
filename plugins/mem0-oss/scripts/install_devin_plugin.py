@@ -51,6 +51,30 @@ def restore_credential(path: Path, previous: tuple[bytes, int] | None) -> None:
             os.close(descriptor)
 
 
+def cleanup_previous_plugin(backup: Path) -> None:
+    try:
+        shutil.rmtree(backup)
+    except OSError as error:
+        # Promotion has committed the new package and credential. A cleanup
+        # failure must not roll either back, but the retained copy needs action.
+        retry = shlex.join(
+            [
+                sys.executable,
+                "-c",
+                "import shutil, sys; shutil.rmtree(sys.argv[1])",
+                str(backup),
+            ]
+        )
+        print(
+            f"Warning: plugin updated, but previous package cleanup failed. "
+            f"Backup remains at: {backup}\n"
+            f"Cleanup error: {error}\n"
+            "Resolve the filesystem error (for example, directory permissions), "
+            f"then retry cleanup with:\n{retry}",
+            file=sys.stderr,
+        )
+
+
 def promote_plugin(
     staging: Path,
     target: Path,
@@ -97,7 +121,7 @@ def promote_plugin(
         raise
     else:
         if package_moved:
-            shutil.rmtree(backup, ignore_errors=True)
+            cleanup_previous_plugin(backup)
 
 
 def main() -> int:
