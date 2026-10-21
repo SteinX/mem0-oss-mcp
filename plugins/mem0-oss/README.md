@@ -79,6 +79,15 @@ Use `--mcp-transport http` only when you explicitly want Codex to connect to
 the HTTP MCP endpoint directly through `bearer_token_env_var`. The default
 `--mcp-transport auto` chooses stdio when `--env-file` is present.
 
+## Devin CLI
+
+`scripts/install_devin_plugin.py` generates a native Devin plugin from the
+upstream portable Agent Plugins bundle and shared Python core. It provides
+the complete OSS MCP tool surface, explicit memory writes and automatic recall.
+Remote automatic capture is opt-in with `--auto-capture`; durable write keys
+are opt-in with `--durable-writes` for Sidecar-backed bridges.
+See [Devin installation and verification](../../docs/devin-plugin.md).
+
 ## OpenCode
 
 OpenCode's official Mem0 plugin runs native TypeScript tools and hooks. Generate

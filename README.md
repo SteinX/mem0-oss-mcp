@@ -2,7 +2,7 @@
 
 Small MCP bridge for the self-hosted Mem0 OSS server from `mem0ai/mem0/server`.
 
-It exposes the Mem0 MCP tool names expected by Codex and forwards them to a
+It exposes the Mem0 MCP tool names expected by coding agents and forwards them to a
 self-hosted Mem0 REST API.
 
 `add_memory` accepts an optional `idempotency_key` (1–128 visible ASCII
@@ -189,6 +189,25 @@ bearer_token_env_var = "MEM0_OSS_MCP_TOKEN"
 The bridge itself does not terminate TLS. Keep its `0.0.0.0:8080` listener on
 a private application network and publish remote MCP only through an HTTPS
 reverse proxy or gateway.
+
+## Devin CLI plugin
+
+Generate a native Devin plugin from Mem0's portable agent plugin and shared
+Python runtime. It includes all bridge MCP tools, working explicit memory
+skills, automatic recall and optional capture. Credentials and local evidence
+stay outside the generated package.
+
+```sh
+git submodule update --init --depth 1 third_party/mem0
+printf '%s\n' "$MEM0_OSS_MCP_TOKEN" | \
+  python3 plugins/mem0-oss/scripts/install_devin_plugin.py \
+  --url https://<bridge-host>/mcp \
+  --user-id <your-mem0-user-id> \
+  --token-stdin --install
+```
+
+Add `--auto-capture` for background extraction. Add `--durable-writes` only
+with a Sidecar-backed bridge. See [Devin setup, behavior and verification](docs/devin-plugin.md).
 
 ## Codex plugin
 
