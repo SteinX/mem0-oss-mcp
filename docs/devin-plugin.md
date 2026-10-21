@@ -82,6 +82,11 @@ Promotion and credential-write failures restore the previous package and the
 credential file's exact contents and mode, or remove a newly created credential.
 If the filesystem also prevents package restoration, its backup is retained and
 the installer reports its location instead of removing it during temporary cleanup.
+If promotion succeeds but deleting the previous package fails, the updated plugin
+and credential remain active. A warning reports the retained backup path, the
+filesystem error and a quoted cleanup command. Correct the reported filesystem
+problem (for example, restore write permission on a read-only backup directory)
+before running that command. Successful cleanup produces no warning or backup.
 For a custom env file, repeat `--env-file` when regenerating.
 
 ## Behavior

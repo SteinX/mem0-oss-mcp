@@ -796,7 +796,9 @@ def test_regeneration_preserves_evidence_and_refuses_unowned_directory(
     plugin, _ = generate(tmp_path)
     hook(plugin, workspace, "session-start")
     status = json.loads(cli(plugin, workspace, "status", "--json").stdout)
-    generate(tmp_path)
+    _, result = generate(tmp_path)
+    assert not result.stderr
+    assert not list(plugin.parent.glob(".mem0-oss-previous-*"))
     assert (
         json.loads(cli(plugin, workspace, "status", "--json").stdout)["events"]
         == status["events"]
@@ -806,6 +808,39 @@ def test_regeneration_preserves_evidence_and_refuses_unowned_directory(
     _, result = generate(tmp_path, check=False)
     assert result.returncode != 0 and "refusing to replace" in result.stderr
     assert (plugin / "hooks.json").is_file()
+
+
+def test_readonly_backup_reports_recovery_without_reverting_update(tmp_path):
+    plugin, _ = generate(tmp_path)
+    (plugin / "core").chmod(0o555)
+    next_token = "next-devin-fixture-token"
+    _, result = generate(tmp_path, "https://new.example/mcp", token=next_token)
+    backups = list(plugin.parent.glob(".mem0-oss-previous-*"))
+    assert len(backups) == 1
+    backup = backups[0]
+    try:
+        assert (backup / "core").is_dir()
+        assert "plugin updated, but previous package cleanup failed" in result.stderr
+        assert f"Backup remains at: {backup}" in result.stderr
+        assert "directory permissions" in result.stderr
+        retry = shlex.split(result.stderr.split("then retry cleanup with:\n")[1])
+        assert retry[-1] == str(backup)
+        assert TOKEN not in result.stderr and next_token not in result.stderr
+        config = json.loads((plugin / ".mem0-oss-runtime.json").read_text())
+        assert config["url"] == "https://new.example/mcp"
+        credential = plugin.parent / "env/mem0-oss.env"
+        assert next_token in credential.read_text()
+        assert stat.S_IMODE(credential.stat().st_mode) == 0o600
+
+        # The reported command works after the actual permission error is fixed.
+        (backup / "core").chmod(0o755)
+        subprocess.run(retry, check=True, capture_output=True, timeout=10)
+        assert not backup.exists()
+        assert (plugin / "hooks.json").is_file()
+        assert next_token in credential.read_text()
+    finally:
+        if (backup / "core").exists():
+            (backup / "core").chmod(0o755)
 
 
 @pytest.mark.parametrize(
