@@ -58,7 +58,13 @@ The default layout is:
 ```
 
 Use `--target-root` to choose another location, `--name` to choose the plugin's
-namespace, and `--env-file` / `--token-env-var` for an existing credential file.
+namespace and MCP server name, and `--env-file` / `--token-env-var` for an existing
+credential file. The default server is `mem0-oss`; distinct plugin names produce
+distinct server names, so they can coexist with an official `mem0` server.
+Skills qualify memory tools with their own server name to keep endpoints and
+credentials separate when multiple memory plugins are installed.
+When an env file is configured, it is authoritative for that plugin; a process
+environment token does not override it or replace a missing file credential.
 Without either a token input or an env file, the selected variable must be in
 Devin's process environment. Only that selected variable is read: missing OSS
 credentials never fall back to a hosted `MEM0_API_KEY`, another client's default

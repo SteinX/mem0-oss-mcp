@@ -31,12 +31,10 @@ if CONFIG.get("user_id"):
 def resolve_token() -> str:
     """Never borrow a hosted key or another client's default credential."""
     name = CONFIG["token_env_var"]
-    return (
-        os.environ.get(name, "").strip()
-        or mem0_oss_adapter.read_dotenv(CONFIG.get("env_file", ""))
-        .get(name, "")
-        .strip()
-    )
+    env_file = CONFIG.get("env_file")
+    if env_file:
+        return mem0_oss_adapter.read_dotenv(env_file).get(name, "").strip()
+    return os.environ.get(name, "").strip()
 
 
 mem0_oss_adapter.resolve_token = resolve_token

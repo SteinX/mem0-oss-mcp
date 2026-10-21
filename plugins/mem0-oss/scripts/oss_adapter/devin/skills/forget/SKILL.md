@@ -4,13 +4,15 @@ description: Delete explicitly selected memories within the current user and rep
 ---
 
 Run `{{CLI}} status --json` in the current workspace to obtain concrete
-`user_id` and `app_id`. Use `get_memories` with those top-level arguments to
+`user_id` and `app_id`. Use only this plugin's `{{SERVER_NAME}}` MCP server.
+Use `mcp__{{SERVER_NAME}}__get_memories` with those top-level arguments to
 inspect the selected memories, following pagination and completeness markers.
 Do not treat a truncated listing as the whole collection.
 
 For an explicit request to clear this user's memories in this repository, call
-`delete_all_memories` with both concrete identities. For selected IDs, read each
-with `get_memory`, verify its user/app scope, then call `delete_memory`. Explain
+`mcp__{{SERVER_NAME}}__delete_all_memories` with both concrete identities. For selected IDs, read each
+with `mcp__{{SERVER_NAME}}__get_memory`, verify its user/app scope, then call
+`mcp__{{SERVER_NAME}}__delete_memory`. Explain
 the deletion scope and seek clarification only if the user's request does not
 identify it. Never broaden deletion to shared or other users' memories without
 an explicit request. Report the actual backend result.

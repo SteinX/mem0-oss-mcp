@@ -127,7 +127,7 @@ def generate(
         staging / ".mcp.json",
         {
             "mcpServers": {
-                "mem0": {
+                name: {
                     "command": sys.executable,
                     "args": ["${PLUGIN_ROOT}/scripts/mem0_oss_devin_mcp.py"],
                 }
@@ -172,7 +172,10 @@ def generate(
     shutil.copy2(templates / "AGENTS.md", staging / "AGENTS.md")
     for path in [staging / "AGENTS.md", *(staging / "skills").rglob("*.md")]:
         path.write_text(
-            path.read_text(encoding="utf-8").replace("{{CLI}}", cli), encoding="utf-8"
+            path.read_text(encoding="utf-8")
+            .replace("{{CLI}}", cli)
+            .replace("{{SERVER_NAME}}", name),
+            encoding="utf-8",
         )
     license_path = source.parents[1] / "LICENSE"
     if license_path.is_file():

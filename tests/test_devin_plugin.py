@@ -143,7 +143,9 @@ def clean_environment():
     return env
 
 
-def generate(tmp_path, url="https://oss.example.test/mcp", *options, check=True):
+def generate(
+    tmp_path, url="https://oss.example.test/mcp", *options, check=True, token=TOKEN
+):
     if not (UPSTREAM / "integrations/mem0-agent-plugin/core/memory_core.py").is_file():
         pytest.skip("initialize third_party/mem0 to exercise the real upstream plugin")
     base = tmp_path / "plugins with spaces"
@@ -157,12 +159,12 @@ def generate(tmp_path, url="https://oss.example.test/mcp", *options, check=True)
             str(base),
             "--token-env-var",
             TOKEN_VAR,
-            "--token-stdin",
+            *(["--token-stdin"] if token is not None else []),
             "--user-id",
             "devin-user",
             *options,
         ],
-        input=TOKEN + "\n",
+        input=token + "\n" if token is not None else None,
         env=clean_environment(),
         text=True,
         capture_output=True,
@@ -171,7 +173,8 @@ def generate(tmp_path, url="https://oss.example.test/mcp", *options, check=True)
     )
     if check:
         assert result.returncode == 0, result.stderr
-    return base / "mem0-oss", result
+    name = options[options.index("--name") + 1] if "--name" in options else "mem0-oss"
+    return base / name, result
 
 
 def cli(plugin, workspace, *args, env=None):
@@ -223,7 +226,8 @@ def hook(plugin, workspace, action, payload=None, *args, env=None):
 
 
 def rpc(plugin, method, params=None, env=None):
-    config = json.loads((plugin / ".mcp.json").read_text())["mcpServers"]["mem0"]
+    servers = json.loads((plugin / ".mcp.json").read_text())["mcpServers"]
+    config = next(iter(servers.values()))
     arguments = [arg.replace("${PLUGIN_ROOT}", str(plugin)) for arg in config["args"]]
     result = subprocess.run(
         [config["command"], *arguments],
@@ -247,8 +251,10 @@ def rpc(plugin, method, params=None, env=None):
     return json.loads(result.stdout)
 
 
-def tool(plugin, name, arguments):
-    result = rpc(plugin, "tools/call", {"name": name, "arguments": arguments})["result"]
+def tool(plugin, name, arguments, *, env=None):
+    result = rpc(plugin, "tools/call", {"name": name, "arguments": arguments}, env=env)[
+        "result"
+    ]
     assert not result.get("isError"), result
     return json.loads(result["content"][0]["text"])
 
@@ -317,6 +323,97 @@ def test_generated_plugin_loads_all_mcp_tools_and_saves_explicit_memory(
     assert calls[0][1]["infer"] is False
     assert memories[0]["metadata"]["app_id"] == scope["app_id"]
     assert cli(plugin, workspace, "doctor", "--json").returncode == 0
+
+
+def test_distinct_plugins_coexist_and_keep_their_endpoints_and_credentials(tmp_path):
+    requests = []
+
+    class Endpoint(BaseHTTPRequestHandler):
+        def do_POST(self):
+            request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            requests.append((self.path, self.headers.get("Authorization")))
+            raw = json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": request["id"],
+                    "result": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": json.dumps({"endpoint": self.path}),
+                            }
+                        ]
+                    },
+                }
+            ).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+        def log_message(self, *_args):
+            pass
+
+    with http_server(Endpoint) as url:
+        personal, _ = generate(tmp_path, f"{url}/personal/mcp")
+        work, _ = generate(
+            tmp_path,
+            f"{url}/work/mcp",
+            "--name",
+            "mem0-work",
+            token="fixture-work-token",
+        )
+        # Devin keeps the first source on a server-name collision. Include an
+        # existing official declaration, then load both generated bundles.
+        loaded = {"mem0": {"command": "official-mem0-server"}}
+        for plugin in (personal, work):
+            config = json.loads((plugin / ".mcp.json").read_text())["mcpServers"]
+            for name, declaration in config.items():
+                loaded.setdefault(name, declaration)
+        assert set(loaded) == {"mem0", "mem0-oss", "mem0-work"}
+        for plugin in (personal, work):
+            for skill in ("remember", "search", "forget"):
+                text = (plugin / "skills" / skill / "SKILL.md").read_text()
+                assert f"mcp__{plugin.name}__" in text
+                assert "{{SERVER_NAME}}" not in text
+        environment = clean_environment()
+        environment[TOKEN_VAR] = "unrelated-ambient-token"
+        assert tool(
+            personal, "search_memories", {"query": "package manager"}, env=environment
+        ) == {"endpoint": "/personal/mcp"}
+        assert tool(
+            work, "search_memories", {"query": "package manager"}, env=environment
+        ) == {"endpoint": "/work/mcp"}
+        assert requests == [
+            ("/personal/mcp", f"Bearer {TOKEN}"),
+            ("/work/mcp", "Bearer fixture-work-token"),
+        ]
+
+
+def test_environment_credential_works_when_no_private_file_is_configured(
+    tmp_path, backend
+):
+    url, calls, _ = backend
+    plugin, _ = generate(tmp_path, url, token=None)
+    assert "env_file" not in json.loads((plugin / ".mem0-oss-runtime.json").read_text())
+    environment = clean_environment()
+    environment[TOKEN_VAR] = TOKEN
+    result = tool(
+        plugin,
+        "search_memories",
+        {
+            "query": "package manager",
+            "user_id": "devin-user",
+            "app_id": "team-project",
+        },
+        env=environment,
+    )
+    assert result == {"results": []}
+    assert calls[-1][1]["filters"] == {
+        "user_id": "devin-user",
+        "app_id": "team-project",
+    }
 
 
 def test_devin_recall_uses_project_env_and_keeps_repositories_separate(
