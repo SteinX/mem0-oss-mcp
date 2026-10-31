@@ -94,8 +94,8 @@ variables are private bridge/operator settings and must not be copied into
 Codex, OpenCode, Cursor, Claude, Hermes, or other client configuration.
 
 Personal/project dual extraction is opt-in. Keep
-`MEM0_OSS_EXTRACTION_MODE=single` unless the Sidecar operator has enabled both
-request profiles and dual extraction and the compatible Core/Sidecar updates
+`MEM0_OSS_EXTRACTION_MODE=single` unless the Sidecar operator has enabled
+dual extraction and the compatible Core/Sidecar updates
 are deployed. Each dual add must set `infer: true`, provide explicit `user_id`
 and `agent_id`, and use a stable `idempotency_key`; single-scope hosts should
 stay in single mode or provide both IDs. See

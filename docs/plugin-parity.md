@@ -9,7 +9,7 @@ a claim about every upstream host or the latest hosted service implementation.
 ## Bridge corrections
 
 | Behavior | Sidecar-backed bridge | Direct Core bridge |
-| --- | --- |
+| --- | --- | --- |
 | Event listing after bridge restart | Queries persisted Sidecar events, not the bridge cache | Process-local only |
 | Event visibility | Authenticated keys see their own MCP channel; filtering happens before pagination/counting | Existing local credential filtering |
 | Event filters | Optional app, user, agent, run, operation and statuses | Explicit filters rejected as unsupported |
@@ -33,8 +33,8 @@ not provide per-key event isolation.
 
 ## Optional request profiles and dual extraction
 
-| Behavior | OSS compatibility boundary |
-| --- | --- |
+| Behavior | OSS implementation | Compatibility boundary |
+| --- | --- | --- |
 | Request-local instructions/categories | Pi, OpenCode, and the generic client forward bounded request fields; Sidecar honors them only when operator policy allows | This is not global project configuration or hosted model-quality parity |
 | Project configuration | `getProject` and `updateProject` fail explicitly; Python setup is a no-op | Operator-only Sidecar policy remains authoritative |
 | Dual extraction | Opt in with `MEM0_OSS_EXTRACTION_MODE=dual` or an explicit request mode | Requires `infer=true`, explicit user and agent IDs, a stable key, and Sidecar `request-profiles-v1` with dual enabled |
@@ -42,8 +42,9 @@ not provide per-key event isolation.
 | Host lifecycle behavior | Generated from the pinned supported host overlays | Not all official hosts have an OSS overlay, and no live host/LLM quality test is claimed here |
 
 The default remains single-track. A dual request splits only when `infer` is
-exactly `true`; explicit `infer=false`, single-scope hosts, or missing either ID
-stay single. No caller identity is guessed from defaults. Both children retain
+exactly `true`; explicit `infer=false` and omitted `infer` stay single. Dual
+inference with either ID missing is rejected before writing; single-scope hosts
+must remain in single mode. No caller identity is guessed from defaults. Both children retain
 the same app/project/run attribution, while the project child uses a derived
 idempotency key. The composite event ID is
 `dual:<personal UUID>:<project UUID>`, remains stable across bridge restarts,
@@ -56,6 +57,17 @@ any child write. Operator instructions and configured categories win (including
 an all-disabled configured set); no global project configuration authority is
 granted to callers. This documents a bounded compatibility layer, not full
 hosted parity or model quality.
+
+Enable `enabled` and `dual_extraction_enabled` in the operator-only Sidecar
+extraction policy; enable `allow_request_profiles` only to accept client
+instruction/category defaults. With that flag off, dual extraction uses the
+operator profile. See the companion
+[Sidecar policy guide](https://github.com/SteinX/mem0-platform-sidecar/blob/devin/1793466000-dual-extraction/docs/extraction-policy.md).
+Each child freezes its own effective policy when its durable intent is created;
+an operator update between the two writes can therefore affect the second child.
+Retry the identical request and original key after a partial failure. Unknown
+or failed upstream outcomes can require operator repair; retries never blindly
+reissue a write. Preserve the original request and key until both children succeed.
 
 Example request:
 
@@ -82,6 +94,8 @@ python -m pytest -q tests/test_plugin_parity.py tests/test_add_idempotency.py \
   tests/test_caller_context.py tests/test_sitecustomize_adapter.py tests/test_server.py
 MEM0_COMPAT_SIDECAR_ROOT=/path/to/mem0-platform-sidecar \
   python -m pytest -q tests/test_plugin_parity.py
+MEM0_DUAL_SIDECAR_ROOT=/path/to/mem0-platform-sidecar \
+  python -m pytest -q tests/test_dual_extraction.py
 tests/run_pi_qa.sh
 ```
 
