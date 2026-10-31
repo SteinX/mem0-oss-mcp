@@ -219,8 +219,10 @@ def _sidecar_backend(
     if Config.sidecar_api_key:
         headers["X-API-Key"] = Config.sidecar_api_key
         caller_context = encode_current_caller_context()
-        operator_status_read = method == "GET" and path.startswith("/v1/event/")
-        if caller_context is not None and not operator_status_read:
+        operator_event_read = (
+            method == "GET" and path.startswith("/v1/event/")
+        ) or (method == "POST" and path == "/v1/events/query")
+        if caller_context is not None and not operator_event_read:
             headers[CALLER_CONTEXT_HEADER] = caller_context
     if body is not None:
         data = json.dumps(body).encode("utf-8")
@@ -1004,6 +1006,7 @@ def delete_all_memories(args: JSON) -> Any:
 
 def list_entities(args: JSON) -> Any:
     if _uses_sidecar():
+        app_id = args.get("app_id") or Config.default_app_id
         entities = []
         for entity_type in ("user", "agent", "run"):
             page = 1
@@ -1013,7 +1016,7 @@ def list_entities(args: JSON) -> Any:
                     "/v1/entities/query",
                     {
                         "project_id": Config.sidecar_project_id,
-                        "app_id": Config.default_app_id,
+                        "app_id": app_id,
                         "entity_type": entity_type,
                         "page": page,
                         "page_size": 100,
@@ -1078,11 +1081,65 @@ def delete_entities(args: JSON) -> Any:
 
 
 def list_events(args: JSON) -> JSON:
+    if _uses_sidecar():
+        page = int(args.get("page") or 1)
+        size = int(args.get("page_size") or args.get("pageSize") or 100)
+        body: JSON = {
+            "project_id": Config.sidecar_project_id,
+            "page": page,
+            "page_size": size,
+        }
+        if args.get("app_id"):
+            body["app_id"] = args["app_id"]
+        else:
+            body["project_wide"] = True
+        body["entity_filters"] = {
+            key: args[key] for key in ("user_id", "agent_id", "run_id")
+            if args.get(key)
+        }
+        for key in ("operation", "statuses"):
+            if key in args:
+                body[key] = args[key]
+        principal = current_http_principal()
+        if principal is not None and principal.mechanism != "disabled":
+            if principal.credential_kind == "core_api_key" and not principal.credential_id:
+                raise BackendError(403, "event listing requires a credential ID")
+            body["channel"] = {
+                "transport": "mcp",
+                "credential_kind": principal.credential_kind,
+                "credential_id": principal.credential_id,
+            }
+        result = _sidecar_backend("POST", "/v1/events/query", body)
+        rows = result["results"]
+        if any(not _can_read_event(event) for event in rows):
+            raise BackendError(502, "Sidecar returned events outside the credential scope")
+        return {
+            "results": [_platform_event(event) for event in rows],
+            "count": result["total"],
+            "page": result["page"],
+            "page_size": result["page_size"],
+            "has_more": result["has_more"],
+        }
+    if any(key in args for key in ("app_id", "user_id", "agent_id", "run_id", "operation", "statuses")):
+        raise ValueError("event filters require the durable sidecar backend")
     events = sorted(
         (event for event in EVENTS.values() if _can_read_event(event)),
         key=lambda event: event["created_at"], reverse=True,
     )
     return _paged(events, args)
+
+
+def _platform_event(event: JSON) -> JSON:
+    return {
+        "event_id": event["id"],
+        "status": event["status"],
+        "memory_id": event.get("subject_id"),
+        "results": event.get("result_previews", []),
+        "result_count": event.get("result_count", 0),
+        "created_at": event.get("requested_at"),
+        "operation": event.get("operation"),
+        "error": event.get("error", {}),
+    }
 
 
 def get_event_status(args: JSON) -> JSON:
@@ -1098,13 +1155,7 @@ def get_event_status(args: JSON) -> JSON:
             )
             if not _can_read_event(event):
                 raise BackendError(404, "event not found")
-            return {
-                "event_id": event_id,
-                "status": event["status"],
-                "memory_id": event.get("subject_id"),
-                "results": event.get("result_previews", []),
-                "result_count": event.get("result_count", 0),
-            }
+            return _platform_event({**event, "id": event_id})
         raise ValueError(f"event not found: {event_id}")
     event = EVENTS[event_id]
     if not _can_read_event(event):
@@ -1222,18 +1273,27 @@ def tool_schema() -> list[JSON]:
         {
             "name": "list_entities",
             "description": "List user, agent, and run entities.",
-            "inputSchema": schema({}),
+            "inputSchema": schema({"app_id": {"type": "string"}}),
         },
         {
             "name": "list_events",
-            "description": "List local bridge memory events.",
+            "description": "List durable Sidecar events visible to this credential, or process-local events with direct Core. Sidecar queries cover the latest 5000 events.",
             "inputSchema": schema(
-                {"page": {"type": "integer"}, "page_size": {"type": "integer"}}
+                {
+                    "page": {"type": "integer", "minimum": 1},
+                    "page_size": {"type": "integer", "minimum": 1, "maximum": 100},
+                    "app_id": {"type": "string"},
+                    "user_id": {"type": "string"},
+                    "agent_id": {"type": "string"},
+                    "run_id": {"type": "string"},
+                    "operation": {"type": "string", "enum": ["ADD", "SEARCH", "GET_ALL"]},
+                    "statuses": {"type": "array", "items": {"type": "string"}},
+                }
             ),
         },
         {
             "name": "get_event_status",
-            "description": "Check local async event status.",
+            "description": "Check an event status, including durable recovery with Sidecar.",
             "inputSchema": schema({"event_id": {"type": "string"}}, ["event_id"]),
         },
     ]

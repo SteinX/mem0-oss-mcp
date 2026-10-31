@@ -164,6 +164,15 @@ def test_disabled_auth_keyless_sidecar_add_event_reads_and_replay_over_loopback(
     }
 
     def sidecar_backend(method, path, body=None, query=None, **kwargs):
+        if method == "POST" and path == "/v1/events/query":
+            assert body is not None
+            return {
+                "results": [persisted_event],
+                "total": 1,
+                "page": body["page"],
+                "page_size": body["page_size"],
+                "has_more": False,
+            }
         if method == "POST":
             return {
                 "event": {"id": persisted_event["id"]},
@@ -223,7 +232,7 @@ def test_disabled_auth_keyless_sidecar_add_event_reads_and_replay_over_loopback(
             {"text": "local memory", "idempotency_key": "local-add-one"},
         )
         assert replayed == added
-        assert transport.call_count == 3
+        assert transport.call_count == 4
 
 
 def test_authenticated_request_reaches_json_rpc():

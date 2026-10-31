@@ -1,5 +1,9 @@
 # mem0-oss-mcp
 
+For the current compatibility boundaries and remaining hosted-plugin gaps, see
+[official plugin parity](docs/plugin-parity.md). The OSS overlay is not complete
+hosted-plugin parity.
+
 Small MCP bridge for the self-hosted Mem0 OSS server from `mem0ai/mem0/server`.
 
 It exposes the Mem0 MCP tool names expected by coding agents and forwards them to a

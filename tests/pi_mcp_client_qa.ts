@@ -66,6 +66,10 @@ process.env.MEM0_OSS_MCP_URL = `http://127.0.0.1:${server.port}/mcp`;
 process.env.MEM0_OSS_BASE_URL = `http://127.0.0.1:${server.port}`;
 const client = new PiMemoryClient({ apiKey: "fixture-token" });
 try {
+  for (const rerank of [true, false, undefined]) {
+    await client.search("fixture", { filters: scope, rerank });
+    assert.equal(calls.at(-1)?.args["rerank"], rerank);
+  }
   // Given a real 5000-record numeric window, when listed normally, then return only one bounded page.
   const list = await client.getAll({ filters: scope });
   assert.equal(list.count, 20);

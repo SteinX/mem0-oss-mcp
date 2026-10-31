@@ -66,6 +66,7 @@ export default class PiMemoryClient {
     requireScope(filters);
     const page = pageSchema.parse(await this.transport.call("search_memories", {
       query, filters, top_k: options.topK ?? 10, threshold: options.threshold,
+      rerank: options.rerank,
     }));
     return { results: page.results };
   }
