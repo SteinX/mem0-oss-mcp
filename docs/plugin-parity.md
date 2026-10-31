@@ -35,7 +35,7 @@ not provide per-key event isolation.
 
 | Official behavior | Current OSS behavior | Why simple forwarding is insufficient |
 | --- | --- | --- |
-| Shared Python plugin sends `custom_instructions` and `agent_custom_instructions` | Bridge add does not forward these fields | Sidecar has one extraction policy/fact kind per add, rather than hosted personal/project dual extraction |
+| Shared Python plugin sends `custom_instructions` and `agent_custom_instructions` | Bridge add does not forward these fields | The client supplies two instruction roles, but the hosted implementation is not verified here |
 | Pi sends `customCategories` | Pi adapter declares but does not send the option | Sidecar classification is project policy controlled and disabled by default; Core support is also required |
 | OpenCode project category setup | `getProject` returns empty categories; `updateProject` is a no-op | Category mutation is operator-only; ordinary MCP callers must not gain global configuration rights |
 | Python hosted category setup | Replaced by a local no-op | It does not configure Sidecar project categories |

@@ -48,7 +48,11 @@ jobs:
           ref: 1084cb8dc788e9c8b5f1c6bfe818a699519ea4ae
           path: sidecar-source
       - name: Install the reviewed Sidecar runtime for real HTTP chain checks
-        run: python -m pip install ./sidecar-source
+        run: python -m pip install ./sidecar-source 'pytest>=8,<9'
+      - name: Verify durable event listing against Sidecar
+        env:
+          MEM0_COMPAT_SIDECAR_ROOT: ${{ github.workspace }}/sidecar-source
+        run: python -m pytest -q tests/test_plugin_parity.py
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: "24"
