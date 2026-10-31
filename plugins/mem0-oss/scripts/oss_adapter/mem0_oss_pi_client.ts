@@ -18,6 +18,10 @@ interface EntityOptions {
   readonly metadata?: Record<string, unknown>;
   readonly source?: string;
   readonly customCategories?: readonly Record<string, string>[];
+  readonly customInstructions?: string;
+  readonly agentCustomInstructions?: string;
+  readonly extractionMode?: "single" | "dual";
+  readonly idempotencyKey?: string;
 }
 export interface ListOptions {
   readonly filters?: Record<string, string>;
@@ -57,7 +61,11 @@ export default class PiMemoryClient {
       messages, ...filters, infer: options.infer ?? false,
       metadata: { type: options.infer ? "auto_capture" : "memory", ...options.metadata,
         ...(filters["app_id"] ? { app_id: filters["app_id"] } : {}) },
-      idempotency_key: randomUUID(),
+      custom_categories: options.customCategories,
+      custom_instructions: options.customInstructions,
+      agent_custom_instructions: options.agentCustomInstructions,
+      extraction_mode: options.extractionMode,
+      idempotency_key: options.idempotencyKey ?? randomUUID(),
     }));
     return { eventId: receipt.event_id, status: receipt.status, message: "Memory stored.", results: [] };
   }

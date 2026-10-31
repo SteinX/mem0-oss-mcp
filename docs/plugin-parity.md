@@ -9,7 +9,7 @@ a claim about every upstream host or the latest hosted service implementation.
 ## Bridge corrections
 
 | Behavior | Sidecar-backed bridge | Direct Core bridge |
-| --- | --- | --- |
+| --- | --- |
 | Event listing after bridge restart | Queries persisted Sidecar events, not the bridge cache | Process-local only |
 | Event visibility | Authenticated keys see their own MCP channel; filtering happens before pagination/counting | Existing local credential filtering |
 | Event filters | Optional app, user, agent, run, operation and statuses | Explicit filters rejected as unsupported |
@@ -31,25 +31,49 @@ does not grant the caller operator access to other Sidecar APIs. The legacy
 shared MCP token remains a shared identity; disabled authentication/stdio do
 not provide per-key event isolation.
 
-## Remaining differences requiring a separate extraction/configuration design
+## Optional request profiles and dual extraction
 
-| Official behavior | Current OSS behavior | Why simple forwarding is insufficient |
-| --- | --- | --- |
-| Shared Python plugin sends `custom_instructions` and `agent_custom_instructions` | Bridge add does not forward these fields | The client supplies two instruction roles, but the hosted implementation is not verified here |
-| Pi sends `customCategories` | Pi adapter declares but does not send the option | Sidecar classification is project policy controlled and disabled by default; Core support is also required |
-| OpenCode project category setup | `getProject` returns empty categories; `updateProject` is a no-op | Category mutation is operator-only; ordinary MCP callers must not gain global configuration rights |
-| Python hosted category setup | Replaced by a local no-op | It does not configure Sidecar project categories |
+| Behavior | OSS compatibility boundary |
+| --- | --- |
+| Request-local instructions/categories | Pi, OpenCode, and the generic client forward bounded request fields; Sidecar honors them only when operator policy allows | This is not global project configuration or hosted model-quality parity |
+| Project configuration | `getProject` and `updateProject` fail explicitly; Python setup is a no-op | Operator-only Sidecar policy remains authoritative |
+| Dual extraction | Opt in with `MEM0_OSS_EXTRACTION_MODE=dual` or an explicit request mode | Requires `infer=true`, explicit user and agent IDs, a stable key, and Sidecar `request-profiles-v1` with dual enabled |
 | Authenticated entity administration | Explicit app is mapped correctly, but Sidecar entity routes remain operator-only | MCP caller attribution can cause an authorization rejection; this change does not bypass that boundary |
 | Host lifecycle behavior | Generated from the pinned supported host overlays | Not all official hosts have an OSS overlay, and no live host/LLM quality test is claimed here |
 
-Do not enable or overwrite project extraction policy merely because an official
-plugin initializes. Operator-configured instructions, category TTLs, attribution,
-explicit-write behavior, and deletion confirmation must remain authoritative.
-Full extraction parity requires deciding whether to retain the current single
-track or add independently scoped personal and project extraction, including
-durable idempotency/recovery for both writes. It also requires a non-admin
-configuration contract (for example, request-local profiles rather than granting
-project-wide mutation privileges).
+The default remains single-track. A dual request splits only when `infer` is
+exactly `true`; explicit `infer=false`, single-scope hosts, or missing either ID
+stay single. No caller identity is guessed from defaults. Both children retain
+the same app/project/run attribution, while the project child uses a derived
+idempotency key. The composite event ID is
+`dual:<personal UUID>:<project UUID>`, remains stable across bridge restarts,
+and `list_events` exposes the child rows. The two durable writes are
+non-atomic: a second-write failure returns 409 and does not roll back the first.
+
+Before activation, apply compatible Sidecar and Core updates and verify
+`GET /v1/extraction-capabilities`. An old or disabled Sidecar is rejected before
+any child write. Operator instructions and configured categories win (including
+an all-disabled configured set); no global project configuration authority is
+granted to callers. This documents a bounded compatibility layer, not full
+hosted parity or model quality.
+
+Example request:
+
+```json
+{
+  "messages": [{"role": "user", "content": "A verified decision"}],
+  "user_id": "alice",
+  "agent_id": "repository",
+  "app_id": "app",
+  "run_id": "run",
+  "infer": true,
+  "extraction_mode": "dual",
+  "idempotency_key": "capture-1",
+  "custom_instructions": "Keep personal preferences.",
+  "agent_custom_instructions": "Keep project procedures.",
+  "custom_categories": [{"decision": "Verified decision"}]
+}
+```
 
 ## Regression checks
 

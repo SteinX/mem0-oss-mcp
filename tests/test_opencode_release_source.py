@@ -64,6 +64,8 @@ def test_portable_generation_vendors_sibling_core_when_source_uses_new_layout(tm
     assert 'from "./agent-plugin-core/identity.ts"' in (plugin / "project.ts").read_text(encoding="utf-8")
     assert 'from "./opencode_release_config"' in source
     assert "CapturePolicy.fromEnv" in source
+    assert "requestCategories: CODING_CATEGORIES" in source
+    assert "autoSetupCategories(mem0, apiKey)" not in source
     assert "resolveApiKey(process.env)" not in source
     assert 'autoCaptureMode: "explicit"' in source
     assert "clientDream: false" in source
@@ -79,7 +81,11 @@ def test_portable_generation_retains_legacy_source_layout(tmp_path: Path) -> Non
     result = generate(upstream, tmp_path / "release")
     # Then: generation succeeds and emits the external config runtime.
     assert result.returncode == 0, result.stderr
-    assert (tmp_path / "release/mem0-oss/opencode_release_config.ts").is_file()
+    plugin = tmp_path / "release/mem0-oss"
+    assert (plugin / "opencode_release_config.ts").is_file()
+    source = (plugin / "opencode-mem0.ts").read_text(encoding="utf-8")
+    assert "requestCategories: CODING_CATEGORIES" in source
+    assert "autoSetupCategories(mem0, apiKey)" not in source
 
 
 @pytest.mark.parametrize("options", [

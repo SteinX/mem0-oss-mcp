@@ -56,6 +56,7 @@ const Mem0Plugin: Plugin = async (ctx) => {
   void client;
   const apiKey = process.env.MEM0_API_KEY;
   if (!apiKey) return {};
+  const CODING_CATEGORIES = ["architecture_decisions", "testing_strategy"];
   const mem0 = new MemoryClient({apiKey});
   const userId = "u";
   const appId = "a";
@@ -67,6 +68,9 @@ const Mem0Plugin: Plugin = async (ctx) => {
   const safeText = "fixture capture text";
   const hasRemember = false;
   await mem0.add([{role: "user", content: "hello"}], {user_id: "u", app_id: "a"});
+
+  Promise.resolve().then(() => autoSetupCategories(mem0, apiKey)).catch(() => {
+  });
 
     if (msgCount % 3 === 0) {
       Promise.resolve().then(async () => {
@@ -162,6 +166,8 @@ def test_opencode_installer_generates_oss_plugin_copy(tmp_path: Path) -> None:
     assert "if (msgCount % 3 === 0)" not in source
     assert 'content: "hello"' in source
     assert "const apiKey = process.env.MEM0_API_KEY" in source
+    assert "requestCategories: CODING_CATEGORIES" in source
+    assert "autoSetupCategories(mem0, apiKey)" not in source
 
 
 def test_opencode_installer_rejects_upstream_auto_capture_drift(tmp_path: Path) -> None:
@@ -281,6 +287,7 @@ def test_opencode_adapter_routes_memory_client_calls_to_mcp(tmp_path: Path) -> N
     script = tmp_path / "adapter_test.ts"
     script.write_text(
         """
+import assert from "node:assert/strict";
 import {initializeMem0OssEnv, MemoryClient} from "__ADAPTER_URI__";
 
 const calls: any[] = [];
@@ -338,8 +345,24 @@ if (process.env.MEM0_API_KEY !== "abc'def # token") {
   throw new Error(`dotenv token was not round-tripped: ${process.env.MEM0_API_KEY}`);
 }
 
-const client = new MemoryClient({apiKey: process.env.MEM0_API_KEY!});
-const add = await client.add([{role: "user", content: "hello"}], {userId: "root", appId: "mem0"});
+const client = new MemoryClient({
+  apiKey: process.env.MEM0_API_KEY!,
+  requestCategories: ["default-category"],
+});
+const add = await client.add([{role: "user", content: "hello"}], {
+  userId: "root",
+  appId: "mem0",
+  customCategories: [{alias: "alias value"}],
+  custom_categories: [{snake: "snake value"}],
+  customInstructions: "alias instructions",
+  custom_instructions: "snake instructions",
+  agentCustomInstructions: "alias agent instructions",
+  agent_custom_instructions: "snake agent instructions",
+  extractionMode: "single",
+  extraction_mode: "dual",
+  idempotencyKey: "alias-key",
+  idempotency_key: "snake-key",
+});
 const search = await client.search("hello", {topK: 3, filters: {AND: [{user_id: "root"}]}});
 const event = await client.client.get("/v1/event/evt_1/");
 
@@ -352,12 +375,31 @@ if (calls[0].name !== "add_memory") throw new Error(`bad first tool ${calls[0].n
 if (calls[0].args.user_id !== "root" || calls[0].args.app_id !== "mem0") {
   throw new Error(`identity args not normalized: ${JSON.stringify(calls[0].args)}`);
 }
+if (JSON.stringify(calls[0].args.custom_categories) !== JSON.stringify([{snake: "snake value"}])
+  || calls[0].args.custom_instructions !== "snake instructions"
+  || calls[0].args.agent_custom_instructions !== "snake agent instructions"
+  || calls[0].args.extraction_mode !== "dual"
+  || calls[0].args.idempotency_key !== "snake-key") {
+  throw new Error(`request options were not normalized with snake precedence: ${JSON.stringify(calls[0].args)}`);
+}
 if (calls[1].name !== "search_memories" || calls[1].args.top_k !== 3) {
   throw new Error(`search args not normalized: ${JSON.stringify(calls[1])}`);
 }
 if (calls[2].name !== "get_event_status" || calls[2].args.event_id !== "evt_1") {
   throw new Error(`event args not mapped: ${JSON.stringify(calls[2])}`);
 }
+const defaultCategories = await client.add([{role: "user", content: "default"}], {
+  userId: "root", appId: "mem0",
+});
+if (defaultCategories.event_id !== "evt_1") throw new Error("default add result mismatch");
+if (JSON.stringify(calls[3].args.custom_categories) !== JSON.stringify(["default-category"])) {
+  throw new Error(`constructor categories were not applied: ${JSON.stringify(calls[3].args)}`);
+}
+if (calls[3].args.idempotency_key !== undefined) {
+  throw new Error("generic adapter must not invent an idempotency key");
+}
+await assert.rejects(client.getProject(), /global project configuration/);
+await assert.rejects(client.updateProject({customCategories: []}), /global project configuration/);
 """.replace("__ADAPTER_URI__", ADAPTER.as_uri()).replace("__ENV_FILE__", (tmp_path / "bridge.env").as_posix()),
         encoding="utf-8",
     )

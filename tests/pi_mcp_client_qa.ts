@@ -102,6 +102,23 @@ try {
   const add = calls.find(call => call.name === "add_memory");
   assert.deepEqual(add?.args["metadata"], { type: "decision", app_id: scope.app_id });
   assert.equal(add?.args["infer"], false);
+  assert.equal(typeof add?.args["idempotency_key"], "string");
+  await client.add([{ role: "user", content: "dual profile" }], {
+    userId: scope.user_id,
+    appId: scope.app_id,
+    infer: true,
+    customCategories: [{ decision: "Verified decision" }],
+    customInstructions: "Personal instructions",
+    agentCustomInstructions: "Project instructions",
+    extractionMode: "dual",
+    idempotencyKey: "caller-supplied-key",
+  });
+  const profileAdd = calls.filter(call => call.name === "add_memory").at(-1);
+  assert.deepEqual(profileAdd?.args["custom_categories"], [{ decision: "Verified decision" }]);
+  assert.equal(profileAdd?.args["custom_instructions"], "Personal instructions");
+  assert.equal(profileAdd?.args["agent_custom_instructions"], "Project instructions");
+  assert.equal(profileAdd?.args["extraction_mode"], "dual");
+  assert.equal(profileAdd?.args["idempotency_key"], "caller-supplied-key");
   // Given an HTTP error containing private details, when searching, then only a safe error is exposed.
   reject = true;
   await assert.rejects(client.search("fixture", { filters: scope }), /HTTP 401$/);

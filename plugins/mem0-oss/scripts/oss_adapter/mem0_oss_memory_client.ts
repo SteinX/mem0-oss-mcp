@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "fs";
 
 type JsonObject = Record<string, any>;
+type RequestCategory = string | Record<string, string>;
 
 const DEFAULT_TOKEN_ENV_VAR = "MEM0_OSS_MCP_TOKEN";
 
@@ -222,6 +223,11 @@ function normalizeOptions(options: JsonObject = {}): JsonObject {
     pageSize: "page_size",
     expirationDate: "expiration_date",
     memoryType: "memory_type",
+    customCategories: "custom_categories",
+    customInstructions: "custom_instructions",
+    agentCustomInstructions: "agent_custom_instructions",
+    extractionMode: "extraction_mode",
+    idempotencyKey: "idempotency_key",
   };
   for (const [from, to] of Object.entries(rename)) {
     if (out[from] !== undefined && out[to] === undefined) out[to] = out[from];
@@ -273,14 +279,20 @@ async function dispatchPath(method: string, path: string): Promise<any> {
 export class MemoryClient {
   apiKey: string;
   host: string;
+  requestCategories?: readonly RequestCategory[];
   client: {
     get: (path: string) => Promise<{ data: any }>;
     delete: (path: string) => Promise<{ data: any }>;
   };
 
-  constructor(options: { apiKey: string; host?: string }) {
+  constructor(options: {
+    apiKey: string;
+    host?: string;
+    requestCategories?: readonly RequestCategory[];
+  }) {
     this.apiKey = options.apiKey;
     this.host = options.host || "mem0-oss-mcp";
+    this.requestCategories = options.requestCategories;
     this.client = {
       get: async (path: string) => ({ data: await dispatchPath("GET", path) }),
       delete: async (path: string) => ({ data: await dispatchPath("DELETE", path) }),
@@ -293,7 +305,14 @@ export class MemoryClient {
   }
 
   async add(messages: Array<JsonObject>, options: JsonObject = {}): Promise<any> {
-    return callTool("add_memory", { messages, ...normalizeOptions(options) });
+    const normalized = normalizeOptions(options);
+    return callTool("add_memory", {
+      messages,
+      ...(normalized.custom_categories === undefined && this.requestCategories !== undefined
+        ? { custom_categories: this.requestCategories }
+        : {}),
+      ...normalized,
+    });
   }
 
   async search(query: string, options: JsonObject = {}): Promise<any> {
@@ -329,11 +348,11 @@ export class MemoryClient {
   }
 
   async getProject(_options: JsonObject = {}): Promise<JsonObject> {
-    return { customCategories: [], custom_categories: [] };
+    throw new Error("Mem0 OSS adapter does not support global project configuration");
   }
 
   async updateProject(_options: JsonObject = {}): Promise<JsonObject> {
-    return { message: "Mem0 OSS adapter skipped hosted project configuration." };
+    throw new Error("Mem0 OSS adapter does not support global project configuration");
   }
 }
 

@@ -2,11 +2,14 @@
 """OSS-safe replacement for hosted Mem0 Platform category setup.
 
 The official plugin runs a background helper that configures hosted Mem0
-Platform project categories. Generated Mem0 OSS plugins do not need that call,
-so the installer replaces ``auto_setup_categories.py`` with this file.
+Platform project categories. Generated Mem0 OSS plugins do not make that
+global configuration call: request-local categories are sent on each add when
+the operator policy allows them. The installer replaces
+``auto_setup_categories.py`` with this file.
 
 The pure helpers mirror the upstream module for tests and compatibility; the
-entry point intentionally exits without contacting hosted Platform APIs.
+entry point intentionally exits without contacting hosted Platform APIs or
+claiming that project categories were configured.
 """
 
 from __future__ import annotations
