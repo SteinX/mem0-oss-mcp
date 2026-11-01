@@ -24,6 +24,7 @@ os.environ["MEM0_API_URL"] = f"https://{mem0_oss_adapter.MEM0_PLATFORM_HOST}"
 os.environ["MEM0_TELEMETRY"] = "false"
 os.environ.setdefault("MEM0_CODE_SEARCH_SCOPE", "mine")
 os.environ.setdefault("MEM0_CODE_AUTO_FLUSH", str(CONFIG["auto_capture"]).lower())
+os.environ.setdefault("MEM0_OSS_EXTRACTION_MODE", str(CONFIG.get("extraction_mode", "single")))
 if CONFIG.get("user_id"):
     os.environ["MEM0_CODE_USER_ID"] = CONFIG["user_id"]
 
@@ -49,8 +50,15 @@ def capture_enabled() -> bool:
     }
 
 
+def extraction_mode() -> str:
+    return os.environ.get("MEM0_OSS_EXTRACTION_MODE", "single").strip().lower()
+
+
 def batch_options(packet_id: str, index: int) -> dict[str, str]:
+    digest = hashlib.sha256(f"{packet_id}:{index}".encode()).hexdigest()
+    if extraction_mode() == "dual":
+        # Dual children always need the stable key so retries dedupe both writes.
+        return {"idempotency_key": f"devin-{digest}", "extraction_mode": "dual"}
     if not CONFIG["durable_writes"]:
         return {}
-    digest = hashlib.sha256(f"{packet_id}:{index}".encode()).hexdigest()
     return {"idempotency_key": f"devin-{digest}"}

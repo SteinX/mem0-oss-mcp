@@ -224,7 +224,10 @@ printf '%s\n' "$MEM0_OSS_MCP_TOKEN" | \
 ```
 
 Add `--auto-capture` for background extraction. Add `--durable-writes` only
-with a Sidecar-backed bridge. See [Devin setup, behavior and verification](docs/devin-plugin.md).
+with a Sidecar-backed bridge. Add `--extraction-mode dual` to route automatic
+capture through the Sidecar's operator-enabled dual extraction (stable batch
+keys are then always included). See
+[Devin setup, behavior and verification](docs/devin-plugin.md).
 
 ## Codex plugin
 

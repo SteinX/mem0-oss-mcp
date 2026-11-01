@@ -37,7 +37,7 @@ not provide per-key event isolation.
 | --- | --- | --- |
 | Request-local instructions/categories | Pi, OpenCode, and the generic client forward bounded request fields; Sidecar honors them only when operator policy allows | This is not global project configuration or hosted model-quality parity |
 | Project configuration | `getProject` and `updateProject` fail explicitly; Python setup is a no-op | Operator-only Sidecar policy remains authoritative |
-| Dual extraction | Opt in with `MEM0_OSS_EXTRACTION_MODE=dual` or an explicit request mode; Pi sends `single` unless its caller chooses `dual` | Requires `infer=true`, explicit user and agent IDs, a stable key, and Sidecar `request-profiles-v1` with dual enabled |
+| Dual extraction | Opt in with `MEM0_OSS_EXTRACTION_MODE=dual`, the Devin `--extraction-mode dual` install flag, or an explicit request mode; Pi sends `single` unless its caller chooses `dual`, and generated Devin/Codex auto-capture stays `single` unless configured | Requires `infer=true`, explicit user and agent IDs, a stable key, and Sidecar `request-profiles-v1` with dual enabled |
 | Authenticated entity administration | Explicit app is mapped correctly, but Sidecar entity routes remain operator-only | MCP caller attribution can cause an authorization rejection; this change does not bypass that boundary |
 | Host lifecycle behavior | Generated from the pinned supported host overlays | Not all official hosts have an OSS overlay, and no live host/LLM quality test is claimed here |
 

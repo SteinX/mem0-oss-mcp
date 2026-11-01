@@ -64,11 +64,6 @@ def generate(
     )
     replace_once(
         staging / "core/memory_core.py",
-        '"idempotency_key": mem0_oss_bootstrap.stable_batch_key(packet_id, index)',
-        "**mem0_oss_bootstrap.batch_options(packet_id, index)",
-    )
-    replace_once(
-        staging / "core/memory_core.py",
         "def api_key() -> str:\n",
         "def api_key() -> str:\n    return mem0_oss_bootstrap.resolve_token()\n\n\n"
         "def _upstream_api_key() -> str:\n",

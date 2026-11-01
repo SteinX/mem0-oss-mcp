@@ -94,3 +94,9 @@ def test_native_codex_hooks_run_with_private_oss_configuration(tmp_path: Path, t
     assert json.loads(standalone.stdout)["key_loaded"] is True
     assert json.loads(standalone.stdout)["adapter"] == "mem0_oss_adapter"
     assert json.loads(standalone.stdout)["data_dir"] == str(codex_dir / "mem0-oss-data" / "mem0")
+
+    dual_env = {**environment, "MEM0_OSS_EXTRACTION_MODE": "dual"}
+    dual_hook = subprocess.run(command, shell=True, check=True, capture_output=True, text=True, env=dual_env)
+    dual_result = json.loads(dual_hook.stdout)
+    assert dual_result["batch"]["body"]["extraction_mode"] == "dual"
+    assert dual_result["batch"]["body"]["idempotency_key"].startswith("codex-")

@@ -116,9 +116,21 @@ Direct Core and Sidecar-backed bridges both work. Add `--durable-writes` only fo
 a Sidecar-backed bridge: it supplies stable `devin-…` batch keys across retries.
 Direct Core rejects those keys, so the default omits them. Direct Core event
 status is process-local; query it immediately. Durable event recovery requires
-Sidecar. The bridge and Core still determine extraction behavior; Platform-only
-category configuration and separate agent/user extraction instructions are not
-added by this adapter.
+Sidecar.
+
+Automatic capture can request the Sidecar's operator-controlled personal/project
+dual extraction, matching the official plugin's two-track writes. Pass
+`--extraction-mode dual` when generating, or set `MEM0_OSS_EXTRACTION_MODE=dual`
+in the Devin process environment; the stable `devin-…` batch key is then always
+included so retries dedupe both child writes. Dual writes are non-atomic: a
+partial failure must be retried with the same key until the Sidecar resolves it.
+The bridge's capability preflight rejects dual requests when the operator policy
+is off or the Sidecar is too old, so keep the default `single` unless that
+policy is enabled. Explicit `add_memory` calls may also pass `extraction_mode`,
+`custom_instructions`, `agent_custom_instructions`, `custom_categories` and
+`idempotency_key` directly, the same option surface as the other clients. The
+bridge and Core still determine extraction behavior; Platform-only category
+configuration is not added by this adapter.
 
 Native hooks use the event's `cwd`, or `DEVIN_PROJECT_DIR` when it is absent. The
 shared Git identity determines `app_id`; the default recall scope is `mine` to
