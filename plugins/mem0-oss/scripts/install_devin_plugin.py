@@ -167,6 +167,15 @@ def main() -> int:
         help="Use durable batch keys; requires a Sidecar-backed MCP bridge",
     )
     parser.add_argument(
+        "--extraction-mode",
+        choices=("single", "dual"),
+        default="single",
+        help=(
+            "Extraction mode for automatic capture writes; 'dual' needs an "
+            "operator-enabled dual policy on the Sidecar"
+        ),
+    )
+    parser.add_argument(
         "--install",
         action="store_true",
         help="Run devin plugins install --local --yes on the generated bundle",
@@ -224,6 +233,7 @@ def main() -> int:
         "data_dir": str(data_dir),
         "auto_capture": args.auto_capture,
         "durable_writes": args.durable_writes,
+        "extraction_mode": args.extraction_mode,
     }
     if env_file is not None:
         config["env_file"] = str(env_file)

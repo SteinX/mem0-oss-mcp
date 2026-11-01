@@ -20,7 +20,7 @@ for server in configuration["mcpServers"].values():
         environment = {**environment, "MEM0_OSS_MCP_URL": server["url"],
                        "MEM0_OSS_MCP_TOKEN_ENV_VAR": server.get("bearer_token_env_var", "MEM0_OSS_MCP_TOKEN")}
     if "MEM0_OSS_MCP_URL" in environment:
-        for name in ("MEM0_OSS_MCP_URL", "MEM0_OSS_MCP_TOKEN_ENV_VAR", "MEM0_OSS_ENV_FILE", "MEM0_CODE_DATA_DIR"):
+        for name in ("MEM0_OSS_MCP_URL", "MEM0_OSS_MCP_TOKEN_ENV_VAR", "MEM0_OSS_ENV_FILE", "MEM0_CODE_DATA_DIR", "MEM0_OSS_EXTRACTION_MODE"):
             if name in environment:
                 os.environ.setdefault(name, environment[name])
         break
@@ -35,3 +35,10 @@ os.environ.setdefault("MEM0_CODE_SEARCH_SCOPE", "mine")
 
 def stable_batch_key(packet_id: str, index: int) -> str:
     return "codex-" + hashlib.sha256(f"{packet_id}:{index}".encode()).hexdigest()
+
+
+def batch_options(packet_id: str, index: int) -> dict[str, str]:
+    options = {"idempotency_key": stable_batch_key(packet_id, index)}
+    if os.environ.get("MEM0_OSS_EXTRACTION_MODE", "single").strip().lower() == "dual":
+        options["extraction_mode"] = "dual"
+    return options

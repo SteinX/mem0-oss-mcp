@@ -46,8 +46,8 @@ def write_native_oss_adapter(adapter_root: Path, plugin_root: Path) -> None:
                 raise ValueError("native Mem0 event contract changed; cannot safely adapt counts")
             content = content.replace(anchor, anchor + "\nimport mem0_oss_bootstrap\n", 1)
             content = content.replace(add_anchor,
-                '{**body, "messages": messages, "idempotency_key": '
-                'mem0_oss_bootstrap.stable_batch_key(packet_id, index)},\n                90,', 1)
+                '{**body, "messages": messages, '
+                '**mem0_oss_bootstrap.batch_options(packet_id, index)},\n                90,', 1)
             content = content.replace(count_anchor, count_anchor +
                 '\n        count = response.get("result_count")'
                 '\n        if isinstance(count, int) and not isinstance(count, bool) and count >= 0:'

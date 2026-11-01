@@ -9,6 +9,7 @@ import stat
 import subprocess
 import sys
 import threading
+import uuid
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -730,6 +731,86 @@ def test_durable_capture_retries_keep_the_same_sidecar_batch_key(
     )
     assert json.loads(second.stdout)["status"] == "semantic-succeeded", second.stdout
     assert len(keys) == 2 and keys[0] == keys[1] and keys[0].startswith("devin-")
+
+
+def test_dual_extraction_capture_sends_split_stable_writes(
+    tmp_path, workspace, backend, monkeypatch
+):
+    url, _, _ = backend
+    plugin, _ = generate(
+        tmp_path, url, "--auto-capture", "--extraction-mode", "dual"
+    )
+    hook(
+        plugin,
+        workspace,
+        "user-prompt",
+        {"prompt": "The repository uses pnpm for package installation."},
+    )
+    hook(
+        plugin,
+        workspace,
+        "stop",
+        {"last_assistant_message": "Package installation uses pnpm."},
+    )
+    monkeypatch.setattr(bridge.Config, "sidecar_base_url", "http://sidecar.fixture")
+    monkeypatch.setattr(bridge.Config, "sidecar_api_key", "private-operator-fixture")
+    seen = []
+
+    def sidecar(method, path, body=None, *, query=None, idempotency_key=None):
+        if method == "GET" and path == "/v1/extraction-capabilities":
+            return {
+                "protocol": "request-profiles-v1",
+                "dual_extraction_enabled": True,
+                "request_profiles_enabled": True,
+            }
+        if method == "POST" and path == "/v3/memories/add":
+            seen.append((dict(body), idempotency_key))
+            principal = bridge.current_http_principal()
+            return {
+                "event": {
+                    "id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"devin-sidecar-{len(seen)}")),
+                    "channel": {
+                        "transport": "mcp",
+                        "credential_kind": principal.credential_kind,
+                        "credential_id": principal.credential_id,
+                    },
+                },
+                "memory": {"results": [{"id": f"durable-memory-{len(seen)}"}]},
+            }
+        if method == "GET":
+            return {
+                "event_id": path.rsplit("/", 1)[-1],
+                "status": "SUCCEEDED",
+                "results": [],
+                "result_count": 0,
+            }
+        raise AssertionError(f"unexpected sidecar call {method} {path}")
+
+    monkeypatch.setattr(bridge, "_sidecar_backend", sidecar)
+    environment = clean_environment()
+    environment["MEM0_CODE_SYNC_FLUSH"] = "1"
+    result = hook(
+        plugin, workspace, "flush", {}, "--reason", "post-compaction", env=environment
+    )
+    assert json.loads(result.stdout)["status"] == "semantic-succeeded", result.stdout
+    assert len(seen) == 2
+    personal, project = sorted(
+        seen, key=lambda item: item[0].get("extraction_track") or ""
+    )
+    assert personal[0]["extraction_track"] == "personal"
+    assert personal[0].get("user_id") and not personal[0].get("agent_id")
+    assert project[0]["extraction_track"] == "project"
+    assert project[0].get("agent_id") and not project[0].get("user_id")
+    assert personal[1].startswith("devin-")
+    assert project[1].startswith("dual-project-")
+
+    retry = hook(
+        plugin, workspace, "flush", {}, "--reason", "post-compaction", env=environment
+    )
+    assert json.loads(retry.stdout)["status"] in {
+        "nothing-to-flush",
+        "semantic-succeeded",
+    }, retry.stdout
 
 
 @pytest.mark.parametrize(
