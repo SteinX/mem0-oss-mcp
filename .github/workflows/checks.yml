@@ -45,10 +45,15 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           repository: SteinX/mem0-platform-sidecar
-          ref: 1084cb8dc788e9c8b5f1c6bfe818a699519ea4ae
+          ref: 4c98f56cad17c34702693248570ef1eed052db9e
           path: sidecar-source
       - name: Install the reviewed Sidecar runtime for real HTTP chain checks
-        run: python -m pip install ./sidecar-source
+        run: python -m pip install ./sidecar-source 'pytest>=8,<9'
+      - name: Verify durable events and dual extraction against Sidecar
+        env:
+          MEM0_COMPAT_SIDECAR_ROOT: ${{ github.workspace }}/sidecar-source
+          MEM0_DUAL_SIDECAR_ROOT: ${{ github.workspace }}/sidecar-source
+        run: python -m pytest -q tests/test_plugin_parity.py tests/test_dual_extraction.py
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: "24"

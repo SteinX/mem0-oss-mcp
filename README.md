@@ -1,5 +1,9 @@
 # mem0-oss-mcp
 
+For the current compatibility boundaries and remaining hosted-plugin gaps, see
+[official plugin parity](docs/plugin-parity.md). The OSS overlay is not complete
+hosted-plugin parity.
+
 Small MCP bridge for the self-hosted Mem0 OSS server from `mem0ai/mem0/server`.
 
 It exposes the Mem0 MCP tool names expected by coding agents and forwards them to a
@@ -59,6 +63,9 @@ MEM0_SIDECAR_REQUIRED=true
 # Required with the sidecar's secure default. This is the private operator
 # credential, not a dashboard-created client key.
 MEM0_SIDECAR_API_KEY=replace-with-private-operator-key
+# single (default) | dual; dual also requires infer=true, both IDs, a stable
+# idempotency key, and Sidecar request-profiles-v1 dual capability.
+MEM0_OSS_EXTRACTION_MODE=single
 # Optional; defaults to a per-process ID and a five-minute heartbeat.
 # MEM0_SIDECAR_INSTANCE_ID=mem0-oss-mcp-1
 # MEM0_SIDECAR_HEARTBEAT_INTERVAL_SECONDS=300
@@ -85,6 +92,16 @@ not assumed.
 Clients configure only the public MCP URL and bearer token. `MEM0_SIDECAR_*`
 variables are private bridge/operator settings and must not be copied into
 Codex, OpenCode, Cursor, Claude, Hermes, or other client configuration.
+
+Personal/project dual extraction is opt-in. Keep
+`MEM0_OSS_EXTRACTION_MODE=single` unless the Sidecar operator has enabled
+dual extraction and the compatible Core/Sidecar updates
+are deployed. Each dual add must set `infer: true`, provide explicit `user_id`
+and `agent_id`, and use a stable `idempotency_key`; single-scope hosts should
+stay in single mode or provide both IDs. See
+[`docs/plugin-parity.md`](docs/plugin-parity.md#optional-request-profiles-and-dual-extraction)
+for the operator policy and request example. The two durable adds are not
+atomic; a partial failure returns 409 and may need operator recovery.
 
 ### MCP client authentication
 

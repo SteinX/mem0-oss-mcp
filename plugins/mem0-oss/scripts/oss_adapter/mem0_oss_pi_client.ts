@@ -18,6 +18,10 @@ interface EntityOptions {
   readonly metadata?: Record<string, unknown>;
   readonly source?: string;
   readonly customCategories?: readonly Record<string, string>[];
+  readonly customInstructions?: string;
+  readonly agentCustomInstructions?: string;
+  readonly extractionMode?: "single" | "dual";
+  readonly idempotencyKey?: string;
 }
 export interface ListOptions {
   readonly filters?: Record<string, string>;
@@ -53,11 +57,18 @@ export default class PiMemoryClient {
   async add(messages: readonly { readonly role: string; readonly content: string }[], options: EntityOptions = {}) {
     const filters = entityFilters(options);
     requireScope(filters);
+    if (options.extractionMode === "dual" && !options.idempotencyKey) {
+      throw new Mem0McpError("Dual extraction requires a stable idempotencyKey");
+    }
     const receipt = receiptSchema.parse(await this.transport.call("add_memory", {
       messages, ...filters, infer: options.infer ?? false,
       metadata: { type: options.infer ? "auto_capture" : "memory", ...options.metadata,
         ...(filters["app_id"] ? { app_id: filters["app_id"] } : {}) },
-      idempotency_key: randomUUID(),
+      custom_categories: options.customCategories,
+      custom_instructions: options.customInstructions,
+      agent_custom_instructions: options.agentCustomInstructions,
+      extraction_mode: options.extractionMode ?? "single",
+      idempotency_key: options.idempotencyKey ?? randomUUID(),
     }));
     return { eventId: receipt.event_id, status: receipt.status, message: "Memory stored.", results: [] };
   }
@@ -66,6 +77,7 @@ export default class PiMemoryClient {
     requireScope(filters);
     const page = pageSchema.parse(await this.transport.call("search_memories", {
       query, filters, top_k: options.topK ?? 10, threshold: options.threshold,
+      rerank: options.rerank,
     }));
     return { results: page.results };
   }

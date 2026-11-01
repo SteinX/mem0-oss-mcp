@@ -339,6 +339,15 @@ def patch_opencode_source(
     )
     content = content.replace(anchor, init, 1)
 
+    constructor_anchor = "  const mem0 = new MemoryClient({apiKey});\n"
+    if content.count(constructor_anchor) != 1:
+        raise ValueError("OpenCode plugin source did not contain exactly one MemoryClient constructor anchor")
+    content = content.replace(
+        constructor_anchor,
+        "  const mem0 = new MemoryClient({apiKey, requestCategories: CODING_CATEGORIES});\n",
+        1,
+    )
+
     if portable:
         content = content.replace(
             'import {MemoryClient, initializeMem0OssEnv} from "./mem0_oss_memory_client";',
@@ -348,12 +357,15 @@ def patch_opencode_source(
         )
         content = re.sub(r'^import\s*\{\s*resolveApiKey\s*\}\s*from\s*["\']\./api-key["\'];\n', "", content, flags=re.MULTILINE)
         content = re.sub(r"const apiKey = resolveApiKey\([^;]+\);", "const apiKey = process.env.MEM0_API_KEY;", content, count=1)
-        content = re.sub(
-            r"  Promise\.resolve\(\)\.then\(\(\) => autoSetupCategories\(mem0, apiKey\)\)\.catch\(\(\) => \{\s*\}\);\n",
-            "",
-            content,
-            count=1,
-        )
+
+    content, auto_setup_count = re.subn(
+        r"  Promise\.resolve\(\)\.then\(\(\) => autoSetupCategories\(mem0, apiKey\)\)\.catch\(\(\) => \{\s*\}\);\n",
+        "",
+        content,
+        count=1,
+    )
+    if auto_setup_count != 1:
+        raise ValueError("OpenCode plugin source did not contain exactly one background category setup call")
 
     state_anchor = '  const mem0StateDir = join(homedir(), ".mem0");\n'
     state_expression = "mem0StateDir"

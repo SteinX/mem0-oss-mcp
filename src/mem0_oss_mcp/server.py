@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import sys
 import threading
 import time
 import uuid
+import unicodedata
 from datetime import date, datetime, timezone
 from http import HTTPStatus
 from http.server import (
@@ -103,6 +105,7 @@ class BackendError(RuntimeError):
 
 
 class Config:
+    extraction_mode = os.environ.get("MEM0_OSS_EXTRACTION_MODE", "single")
     base_url = os.environ.get("MEM0_OSS_BASE_URL", "").rstrip("/")
     api_key = os.environ.get("MEM0_OSS_API_KEY", "")
     host = os.environ.get("MEM0_OSS_MCP_HOST", "0.0.0.0")
@@ -219,8 +222,10 @@ def _sidecar_backend(
     if Config.sidecar_api_key:
         headers["X-API-Key"] = Config.sidecar_api_key
         caller_context = encode_current_caller_context()
-        operator_status_read = method == "GET" and path.startswith("/v1/event/")
-        if caller_context is not None and not operator_status_read:
+        operator_event_read = (
+            method == "GET" and path.startswith("/v1/event/")
+        ) or (method == "POST" and path == "/v1/events/query")
+        if caller_context is not None and not operator_event_read:
             headers[CALLER_CONTEXT_HEADER] = caller_context
     if body is not None:
         data = json.dumps(body).encode("utf-8")
@@ -535,6 +540,62 @@ def _backend_honors_list_limit(query: JSON) -> bool:
 
 
 def add_memory(args: JSON) -> JSON:
+    if "extraction_track" in args:
+        raise ValueError("extraction_track is internal; use extraction_mode")
+    mode = args.get("extraction_mode", Config.extraction_mode)
+    if mode not in ("single", "dual"):
+        raise ValueError("extraction_mode must be single or dual")
+    if mode == "dual" and args.get("infer") is True:
+        return _add_dual_memory(args)
+    return _add_single_memory(args)
+
+
+def _add_dual_memory(args: JSON) -> JSON:
+    if not _uses_sidecar():
+        raise ValueError("dual extraction requires the durable sidecar backend")
+    key = args.get("idempotency_key")
+    if not isinstance(key, str) or not 1 <= len(key) <= 128 or any(
+        ord(char) < 33 or ord(char) > 126 for char in key
+    ):
+        raise ValueError("dual extraction requires a stable idempotency_key")
+    for field in ("user_id", "agent_id"):
+        value = args.get(field)
+        if (
+            type(value) is not str or not value or len(value) > 256
+            or value == "*" or unicodedata.normalize("NFC", value) != value
+            or any(char.isspace() or unicodedata.category(char).startswith("C") for char in value)
+        ):
+            raise ValueError(f"dual extraction requires an explicit portable {field}")
+    metadata = dict(args.get("metadata") or {})
+    app_id = args.get("app_id") or metadata.get("app_id") or Config.default_app_id
+    capabilities = _sidecar_backend(
+        "GET", "/v1/extraction-capabilities",
+        query={"project_id": Config.sidecar_project_id, "app_id": app_id},
+    )
+    if capabilities.get("protocol") != "request-profiles-v1" or capabilities.get("dual_extraction_enabled") is not True:
+        raise ValueError("dual extraction is not enabled by the Sidecar operator")
+    metadata["_mem0_dual_request_fingerprint"] = hashlib.sha256(
+        json.dumps(args, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+    ).hexdigest()
+    personal = {**args, "metadata": {**metadata, "memory_track": "personal"}}
+    personal.pop("agent_id")
+    project = {**args, "metadata": {**metadata, "memory_track": "project"}}
+    project.pop("user_id")
+    project["idempotency_key"] = "dual-project-" + hashlib.sha256(key.encode()).hexdigest()
+    first = _add_single_memory(personal, track="personal")
+    try:
+        second = _add_single_memory(project, track="project")
+    except Exception as exc:
+        raise BackendError(
+            409, "Dual extraction is incomplete; personal extraction is recorded. "
+            "Retry the identical request with the original idempotency_key; "
+            "an unresolved upstream outcome may require operator recovery.",
+        ) from exc
+    event_id = f"dual:{first['event_id']}:{second['event_id']}"
+    return {"event_id": event_id, "status": "SUCCEEDED", "events": [first, second]}
+
+
+def _add_single_memory(args: JSON, *, track: str | None = None) -> JSON:
     idempotency_key = args.get("idempotency_key")
     if idempotency_key is not None:
         if (
@@ -564,11 +625,20 @@ def add_memory(args: JSON) -> JSON:
         "metadata": metadata,
         "user_id": args.get("user_id") or Config.default_user_id,
     }
+    if track == "project":
+        body.pop("user_id")
+    if track is not None:
+        body["extraction_track"] = track
     if expiration_date is not None:
         body["expiration_date"] = expiration_date
     for key in ("agent_id", "run_id", "infer", "memory_type", "prompt"):
         if key in args and args[key] is not None:
             body[key] = args[key]
+
+    if _uses_sidecar():
+        for field in ("custom_instructions", "agent_custom_instructions", "custom_categories"):
+            if field in args and args[field] is not None:
+                body[field] = args[field]
 
     if _uses_sidecar():
         principal = current_http_principal()
@@ -1004,6 +1074,7 @@ def delete_all_memories(args: JSON) -> Any:
 
 def list_entities(args: JSON) -> Any:
     if _uses_sidecar():
+        app_id = args.get("app_id") or Config.default_app_id
         entities = []
         for entity_type in ("user", "agent", "run"):
             page = 1
@@ -1013,7 +1084,7 @@ def list_entities(args: JSON) -> Any:
                     "/v1/entities/query",
                     {
                         "project_id": Config.sidecar_project_id,
-                        "app_id": Config.default_app_id,
+                        "app_id": app_id,
                         "entity_type": entity_type,
                         "page": page,
                         "page_size": 100,
@@ -1078,6 +1149,47 @@ def delete_entities(args: JSON) -> Any:
 
 
 def list_events(args: JSON) -> JSON:
+    if _uses_sidecar():
+        page = int(args.get("page") or 1)
+        size = int(args.get("page_size") or args.get("pageSize") or 100)
+        body: JSON = {
+            "project_id": Config.sidecar_project_id,
+            "page": page,
+            "page_size": size,
+        }
+        if args.get("app_id"):
+            body["app_id"] = args["app_id"]
+        else:
+            body["project_wide"] = True
+        body["entity_filters"] = {
+            key: args[key] for key in ("user_id", "agent_id", "run_id")
+            if args.get(key)
+        }
+        for key in ("operation", "statuses"):
+            if key in args:
+                body[key] = args[key]
+        principal = current_http_principal()
+        if principal is not None and principal.mechanism != "disabled":
+            if principal.credential_kind == "core_api_key" and not principal.credential_id:
+                raise BackendError(403, "event listing requires a credential ID")
+            body["channel"] = {
+                "transport": "mcp",
+                "credential_kind": principal.credential_kind,
+                "credential_id": principal.credential_id,
+            }
+        result = _sidecar_backend("POST", "/v1/events/query", body)
+        rows = result["results"]
+        if any(not _can_read_event(event) for event in rows):
+            raise BackendError(502, "Sidecar returned events outside the credential scope")
+        return {
+            "results": [_platform_event(event) for event in rows],
+            "count": result["total"],
+            "page": result["page"],
+            "page_size": result["page_size"],
+            "has_more": result["has_more"],
+        }
+    if any(key in args for key in ("app_id", "user_id", "agent_id", "run_id", "operation", "statuses")):
+        raise ValueError("event filters require the durable sidecar backend")
     events = sorted(
         (event for event in EVENTS.values() if _can_read_event(event)),
         key=lambda event: event["created_at"], reverse=True,
@@ -1085,10 +1197,41 @@ def list_events(args: JSON) -> JSON:
     return _paged(events, args)
 
 
+def _platform_event(event: JSON) -> JSON:
+    return {
+        "event_id": event["id"],
+        "status": event["status"],
+        "memory_id": event.get("subject_id"),
+        "results": event.get("result_previews", []),
+        "result_count": event.get("result_count", 0),
+        "created_at": event.get("requested_at"),
+        "operation": event.get("operation"),
+        "error": event.get("error", {}),
+    }
+
+
 def get_event_status(args: JSON) -> JSON:
     event_id = args.get("event_id")
     if not event_id:
         raise ValueError("get_event_status requires event_id")
+    if isinstance(event_id, str) and event_id.startswith("dual:"):
+        parts = event_id.split(":")
+        if len(parts) != 3:
+            raise ValueError("Invalid dual event ID")
+        try:
+            ids = [str(uuid.UUID(part)) for part in parts[1:]]
+        except ValueError as exc:
+            raise ValueError("Invalid dual event ID") from exc
+        events = [get_event_status({"event_id": child}) for child in ids]
+        statuses = {event["status"] for event in events}
+        status = "SUCCEEDED" if statuses == {"SUCCEEDED"} else (
+            "FAILED" if "FAILED" in statuses else "PENDING"
+        )
+        return {
+            "event_id": event_id, "status": status, "events": events,
+            "results": [row for event in events for row in event.get("results", [])],
+            "result_count": sum(event.get("result_count", 0) for event in events),
+        }
     if event_id not in EVENTS:
         if _uses_sidecar():
             event = _sidecar_backend(
@@ -1098,13 +1241,7 @@ def get_event_status(args: JSON) -> JSON:
             )
             if not _can_read_event(event):
                 raise BackendError(404, "event not found")
-            return {
-                "event_id": event_id,
-                "status": event["status"],
-                "memory_id": event.get("subject_id"),
-                "results": event.get("result_previews", []),
-                "result_count": event.get("result_count", 0),
-            }
+            return _platform_event({**event, "id": event_id})
         raise ValueError(f"event not found: {event_id}")
     event = EVENTS[event_id]
     if not _can_read_event(event):
@@ -1148,6 +1285,10 @@ def tool_schema() -> list[JSON]:
                     "text": {"type": "string"},
                     "messages": {"type": "array"},
                     "infer": {"type": "boolean"},
+                    "extraction_mode": {"type": "string", "enum": ["single", "dual"]},
+                    "custom_instructions": {"type": "string", "maxLength": 8192},
+                    "agent_custom_instructions": {"type": "string", "maxLength": 8192},
+                    "custom_categories": {"type": "array", "maxItems": 64},
                     "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 128},
                     "expiration_date": {"type": "string"},
                     **common,
@@ -1222,18 +1363,27 @@ def tool_schema() -> list[JSON]:
         {
             "name": "list_entities",
             "description": "List user, agent, and run entities.",
-            "inputSchema": schema({}),
+            "inputSchema": schema({"app_id": {"type": "string"}}),
         },
         {
             "name": "list_events",
-            "description": "List local bridge memory events.",
+            "description": "List durable Sidecar events visible to this credential, or process-local events with direct Core. Sidecar queries cover the latest 5000 events.",
             "inputSchema": schema(
-                {"page": {"type": "integer"}, "page_size": {"type": "integer"}}
+                {
+                    "page": {"type": "integer", "minimum": 1},
+                    "page_size": {"type": "integer", "minimum": 1, "maximum": 100},
+                    "app_id": {"type": "string"},
+                    "user_id": {"type": "string"},
+                    "agent_id": {"type": "string"},
+                    "run_id": {"type": "string"},
+                    "operation": {"type": "string", "enum": ["ADD", "SEARCH", "GET_ALL"]},
+                    "statuses": {"type": "array", "items": {"type": "string"}},
+                }
             ),
         },
         {
             "name": "get_event_status",
-            "description": "Check local async event status.",
+            "description": "Check an event status, including durable recovery with Sidecar.",
             "inputSchema": schema({"event_id": {"type": "string"}}, ["event_id"]),
         },
     ]
