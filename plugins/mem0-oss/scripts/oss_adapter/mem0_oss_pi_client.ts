@@ -57,6 +57,9 @@ export default class PiMemoryClient {
   async add(messages: readonly { readonly role: string; readonly content: string }[], options: EntityOptions = {}) {
     const filters = entityFilters(options);
     requireScope(filters);
+    if (options.extractionMode === "dual" && !options.idempotencyKey) {
+      throw new Mem0McpError("Dual extraction requires a stable idempotencyKey");
+    }
     const receipt = receiptSchema.parse(await this.transport.call("add_memory", {
       messages, ...filters, infer: options.infer ?? false,
       metadata: { type: options.infer ? "auto_capture" : "memory", ...options.metadata,
@@ -64,7 +67,7 @@ export default class PiMemoryClient {
       custom_categories: options.customCategories,
       custom_instructions: options.customInstructions,
       agent_custom_instructions: options.agentCustomInstructions,
-      extraction_mode: options.extractionMode,
+      extraction_mode: options.extractionMode ?? "single",
       idempotency_key: options.idempotencyKey ?? randomUUID(),
     }));
     return { eventId: receipt.event_id, status: receipt.status, message: "Memory stored.", results: [] };

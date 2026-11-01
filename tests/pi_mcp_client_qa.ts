@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import PiMemoryClient from "../plugins/mem0-oss/scripts/oss_adapter/mem0_oss_pi_client.ts";
+import { Mem0McpError } from "../plugins/mem0-oss/scripts/oss_adapter/mem0_oss_pi_transport.ts";
 
 const scope = { user_id: "fixture-user", app_id: "android-reddoc" };
 const rows = Array.from({ length: 8568 }, (_, index) => ({
@@ -102,23 +103,46 @@ try {
   const add = calls.find(call => call.name === "add_memory");
   assert.deepEqual(add?.args["metadata"], { type: "decision", app_id: scope.app_id });
   assert.equal(add?.args["infer"], false);
+  assert.equal(add?.args["extraction_mode"], "single");
   assert.equal(typeof add?.args["idempotency_key"], "string");
-  await client.add([{ role: "user", content: "dual profile" }], {
+  const dualMessages = [{ role: "user", content: "dual profile" }];
+  const dualOptions = {
     userId: scope.user_id,
+    agentId: "fixture-agent",
     appId: scope.app_id,
     infer: true,
     customCategories: [{ decision: "Verified decision" }],
     customInstructions: "Personal instructions",
     agentCustomInstructions: "Project instructions",
     extractionMode: "dual",
-    idempotencyKey: "caller-supplied-key",
-  });
-  const profileAdd = calls.filter(call => call.name === "add_memory").at(-1);
+  } as const;
+  for (const idempotencyKey of [undefined, ""]) {
+    const callsBefore = calls.length;
+    await assert.rejects(
+      client.add(dualMessages, { ...dualOptions, idempotencyKey }),
+      error => error instanceof Mem0McpError,
+    );
+    assert.equal(calls.length, callsBefore);
+  }
+  const callsBeforeDualRetry = calls.length;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    await client.add(dualMessages, {
+      ...dualOptions,
+      idempotencyKey: "caller-supplied-key",
+    });
+  }
+  const dualCalls = calls.slice(callsBeforeDualRetry);
+  assert.equal(dualCalls.length, 2);
+  assert.deepEqual(dualCalls.map(call => call.args["agent_id"]), ["fixture-agent", "fixture-agent"]);
+  assert.deepEqual(dualCalls.map(call => call.args["extraction_mode"]), ["dual", "dual"]);
+  assert.deepEqual(dualCalls.map(call => call.args["idempotency_key"]), [
+    "caller-supplied-key",
+    "caller-supplied-key",
+  ]);
+  const profileAdd = dualCalls.at(-1);
   assert.deepEqual(profileAdd?.args["custom_categories"], [{ decision: "Verified decision" }]);
   assert.equal(profileAdd?.args["custom_instructions"], "Personal instructions");
   assert.equal(profileAdd?.args["agent_custom_instructions"], "Project instructions");
-  assert.equal(profileAdd?.args["extraction_mode"], "dual");
-  assert.equal(profileAdd?.args["idempotency_key"], "caller-supplied-key");
   // Given an HTTP error containing private details, when searching, then only a safe error is exposed.
   reject = true;
   await assert.rejects(client.search("fixture", { filters: scope }), /HTTP 401$/);

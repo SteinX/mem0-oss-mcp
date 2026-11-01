@@ -37,7 +37,7 @@ not provide per-key event isolation.
 | --- | --- | --- |
 | Request-local instructions/categories | Pi, OpenCode, and the generic client forward bounded request fields; Sidecar honors them only when operator policy allows | This is not global project configuration or hosted model-quality parity |
 | Project configuration | `getProject` and `updateProject` fail explicitly; Python setup is a no-op | Operator-only Sidecar policy remains authoritative |
-| Dual extraction | Opt in with `MEM0_OSS_EXTRACTION_MODE=dual` or an explicit request mode | Requires `infer=true`, explicit user and agent IDs, a stable key, and Sidecar `request-profiles-v1` with dual enabled |
+| Dual extraction | Opt in with `MEM0_OSS_EXTRACTION_MODE=dual` or an explicit request mode; Pi sends `single` unless its caller chooses `dual` | Requires `infer=true`, explicit user and agent IDs, a stable key, and Sidecar `request-profiles-v1` with dual enabled |
 | Authenticated entity administration | Explicit app is mapped correctly, but Sidecar entity routes remain operator-only | MCP caller attribution can cause an authorization rejection; this change does not bypass that boundary |
 | Host lifecycle behavior | Generated from the pinned supported host overlays | Not all official hosts have an OSS overlay, and no live host/LLM quality test is claimed here |
 
@@ -51,6 +51,11 @@ idempotency key. The composite event ID is
 and `list_events` exposes the child rows. The two durable writes are
 non-atomic: a second-write failure returns 409 and does not roll back the first.
 
+Pi explicitly sends `extraction_mode: "single"` by default. A Pi caller must
+choose `extractionMode: "dual"` and supply a non-empty stable `idempotencyKey`;
+the adapter rejects dual adds without that key before making an MCP request.
+Callers must reuse the same key when retrying an uncertain dual add.
+
 Before activation, apply compatible Sidecar and Core updates and verify
 `GET /v1/extraction-capabilities`. An old or disabled Sidecar is rejected before
 any child write. Operator instructions and configured categories win (including
@@ -62,7 +67,7 @@ Enable `enabled` and `dual_extraction_enabled` in the operator-only Sidecar
 extraction policy; enable `allow_request_profiles` only to accept client
 instruction/category defaults. With that flag off, dual extraction uses the
 operator profile. See the companion
-[Sidecar policy guide](https://github.com/SteinX/mem0-platform-sidecar/blob/devin/1793466000-dual-extraction/docs/extraction-policy.md).
+[Sidecar policy guide](https://github.com/SteinX/mem0-platform-sidecar/blob/v0.3.16/docs/extraction-policy.md).
 Each child freezes its own effective policy when its durable intent is created;
 an operator update between the two writes can therefore affect the second child.
 Retry the identical request and original key after a partial failure. Unknown
